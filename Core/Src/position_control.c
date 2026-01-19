@@ -1,190 +1,226 @@
-/**
- * @file position_control.c
- * @brief Position control implementation
- * @author 팀장
- */
-
-#include "main.h"
 #include "position_control.h"
-#include "pulse_control.h"      // Person A
-#include "relay_control.h"      // Person B
-#include "encoder_reader.h"     // Person C
-#include "homing.h"             // Person B
+#include "encoder_reader.h"      // 엔코더 읽기
+#include "pulse_control.h"       // 펄스 출력
 #include <stdio.h>
-#include <math.h>
+#include <stdint.h>              // uint32_t, int32_t
+#include <stdbool.h>             // bool
+#include <math.h>                // fabsf
+//의존성
 
-/* ========== Private Variables ========== */
-
-static PosCtrlState_t state = {
-    .current_angle = 0.0f,
-    .target_angle = 0.0f,
-    .error = 0.0f,
-    .status = POS_CTRL_STATUS_IDLE
+// 내부 변수 지정
+static PID_Params_t pid_params = {
+    .Kp = 500.0f,           // 초기값 (실험으로 튜닝 필요)
+    .Ki = 5.0f,
+    .Kd = 20.0f,
+    .integral_limit = 1000.0f,
+    .output_limit = 10000.0f   // 최대 펄스 주파수 (Hz)
 };
 
-/* ========== Private Functions ========== */
+static struct {
+    float prev_error;
+    float integral;
+    uint32_t last_time_ms;
+} pid_state = {0};
 
-/**
- * @brief Calculate pulses needed
- */
-static uint32_t calculate_pulses(float angle_deg)
-{
-    // 전자기어비: P4-01/P4-05 = 524288/12000 = 43.69
-    // 1회전 = 12000 펄스 (엔코더)
-    // 360도 = 12000 펄스
-    // 1도 = 33.33 펄스
+static PositionControl_State_t state = {
+    .target_angle = 0.0f,
+    .current_angle = 0.0f,
+    .error = 0.0f,
+    .output = 0.0f,
+    .is_stable = false,
+    .stable_time_ms = 0
+};
+
+static bool control_enabled = false;
+
+// ========== 초기화 ==========
+int PositionControl_Init(void) {
+    pid_state.prev_error = 0.0f;
+    pid_state.integral = 0.0f;
+    pid_state.last_time_ms = HAL_GetTick();
     
-    float pulses_per_degree = 12000.0f / 360.0f;
-    uint32_t pulses = (uint32_t)fabsf(angle_deg * pulses_per_degree);
-    
-    return pulses;
+    state.target_angle = 0.0f;
+    state.current_angle = 0.0f;
+    control_enabled = false;
+
+    printf("[PosCtrl] Initialized\n");
+    return POS_CTRL_OK;  // 성공
 }
 
-/* ========== Public Functions ========== */
-
-/**
- * @brief Initialize position control
- */
-int PosCtrl_Init(void)
-{
-    printf("[PosCtrl] Initializing...\r\n");
+// ========== PID 계산 ==========
+static float PID_Calculate(float error, float dt) {
+    // P항
+    float p_term = pid_params.Kp * error;
     
-    // Initialize subsystems
-    Pulse_Init();
-    Relay_Init();
-    Encoder_Init();
-    Homing_Init();
+    // I항 (적분 와인드업 방지)
+    pid_state.integral += error * dt;
     
-    // Perform homing
-    printf("[PosCtrl] Performing homing...\r\n");
-    Relay_ServoOn();
-    HAL_Delay(100);
-    
-    if (Homing_FindZero() != 0) {
-        printf("[PosCtrl] ERROR: Homing failed!\r\n");
-        return -1;
+    // 적분 제한
+    if (pid_state.integral > pid_params.integral_limit) {
+        pid_state.integral = pid_params.integral_limit;
+    } else if (pid_state.integral < -pid_params.integral_limit) {
+        pid_state.integral = -pid_params.integral_limit;
     }
     
-    // Update current position
-    state.current_angle = Encoder_GetAngle();
-    state.target_angle = state.current_angle;
-    state.error = 0.0f;
-    state.status = POS_CTRL_STATUS_IDLE;
+    float i_term = pid_params.Ki * pid_state.integral;
     
-    printf("[PosCtrl] Initialized at %.2f deg\r\n", state.current_angle);
+    // D항 (미분)
+    float derivative = (error - pid_state.prev_error) / dt;
+    float d_term = pid_params.Kd * derivative;
     
-    return 0;
-}
-
-/**
- * @brief Move to target angle
- */
-int PosCtrl_MoveTo(float target_angle)
-{
-    // Limit check
-    if (target_angle > POSITION_CONTROL_MAX_ANGLE || 
-        target_angle < POSITION_CONTROL_MIN_ANGLE) {
-        printf("[PosCtrl] ERROR: Target out of range: %.2f deg\r\n", target_angle);
-        return -1;
+    pid_state.prev_error = error;
+    
+    // 출력 계산
+    float output = p_term + i_term + d_term;
+    
+    // 출력 제한
+    if (output > pid_params.output_limit) {
+        output = pid_params.output_limit;
+    } else if (output < -pid_params.output_limit) {
+        output = -pid_params.output_limit;
     }
     
-    state.target_angle = target_angle;
-    state.status = POS_CTRL_STATUS_MOVING;
-    
-    printf("[PosCtrl] Moving to %.2f deg\r\n", target_angle);
-    
-    return 0;
+    return output;
 }
 
-/**
- * @brief Move relative
- */
-int PosCtrl_MoveRelative(float delta_angle)
-{
-    float new_target = state.current_angle + delta_angle;
-    return PosCtrl_MoveTo(new_target);
-}
-
-/**
- * @brief Update control loop
- */
-int PosCtrl_Update(void)
-{
-    // Update current position
-    state.current_angle = Encoder_GetAngle();
+// ========== 메인 제어 루프 (1ms마다 호출!) ==========
+void PositionControl_Update(void) {
+    if (!control_enabled) {
+        PulseControl_Stop();
+        return;
+    }
+    
+    // 1. 현재 각도 읽기
+    state.current_angle = EncoderReader_GetAngleDeg();
+    
+    // 2. 안전 체크
+    if (!PositionControl_CheckSafety()) {
+        PositionControl_EmergencyStop();
+        return;
+    }
+    
+    // 3. 오차 계산
     state.error = state.target_angle - state.current_angle;
     
-    // Check if idle
-    if (state.status == POS_CTRL_STATUS_IDLE) {
-        return 0;
+    // 4. 시간 계산
+    uint32_t current_time = HAL_GetTick();
+    float dt = (current_time - pid_state.last_time_ms) / 1000.0f;  // ms → s
+    pid_state.last_time_ms = current_time;
+    
+    // 5. PID 계산
+    state.output = PID_Calculate(state.error, dt);
+    
+    // 6. 펄스 출력
+    PulseControl_SetFrequency((int32_t)state.output);
+    
+    // 7. 안정화 판단
+    if (fabsf(state.error) < POSITION_TOLERANCE) {
+        state.stable_time_ms++;
+        if (state.stable_time_ms > 100) {  // 100ms 이상 안정
+            state.is_stable = true;
+        }
+    } else {
+        state.stable_time_ms = 0;
+        state.is_stable = false;
     }
-    
-    // Check if reached
-    if (fabsf(state.error) < POSITION_CONTROL_TOLERANCE) {
-        state.status = POS_CTRL_STATUS_REACHED;
-        printf("[PosCtrl] Target reached! Current: %.2f deg\r\n", state.current_angle);
-        return 0;
+}
+
+// ========== 목표 설정 ==========
+int PositionControl_SetTarget(float target_deg) {
+    // 범위 체크
+    if (target_deg > MAX_ANGLE_DEG || target_deg < MIN_ANGLE_DEG) {
+        printf("[PosCtrl] ERROR: Target out of range: %.2f\n", target_deg);
+        return POS_CTRL_ERR_OVER_LIMIT;  // 범위 초과 에러
     }
-    
-    // Calculate pulses
-    uint32_t pulses = calculate_pulses(state.error);
-    uint8_t direction = (state.error > 0) ? 1 : 0;  // 1=forward, 0=reverse
-    
-    // Generate pulses
-    printf("[PosCtrl] Generating %lu pulses, dir=%d\r\n", pulses, direction);
-    Pulse_Generate(pulses, direction);
-    
-    // Update position
-    state.current_angle = Encoder_GetAngle();
-    state.error = state.target_angle - state.current_angle;
-    
-    printf("[PosCtrl] Current: %.2f, Error: %.2f deg\r\n", 
-           state.current_angle, state.error);
-    
-    return 0;
+
+    state.target_angle = target_deg;
+    state.is_stable = false;
+    state.stable_time_ms = 0;
+
+    printf("[PosCtrl] Target set: %.2f deg\n", target_deg);
+    return POS_CTRL_OK;  // 성공
 }
 
-/**
- * @brief Stop movement
- */
-void PosCtrl_Stop(void)
-{
-    Pulse_Stop();
-    state.status = POS_CTRL_STATUS_IDLE;
-    state.target_angle = state.current_angle;
-    state.error = 0.0f;
-    
-    printf("[PosCtrl] Stopped at %.2f deg\r\n", state.current_angle);
+// ========== 상태 읽기 ==========
+PositionControl_State_t PositionControl_GetState(void) {
+    return state;
 }
 
-/**
- * @brief Get current state
- */
-const PosCtrlState_t* PosCtrl_GetState(void)
-{
-    return &state;
-}
-
-/**
- * @brief Check if target reached
- */
-uint8_t PosCtrl_IsTargetReached(void)
-{
-    return (state.status == POS_CTRL_STATUS_REACHED) ? 1 : 0;
-}
-
-/**
- * @brief Get current position
- */
-float PosCtrl_GetPosition(void)
-{
+float PositionControl_GetCurrentAngle(void) {
     return state.current_angle;
 }
 
-/**
- * @brief Get position error
- */
-float PosCtrl_GetError(void)
-{
-    return state.error;
+bool PositionControl_IsStable(void) {
+    return state.is_stable;
+}
+
+// ========== PID 게인 설정 ==========
+void PositionControl_SetPID(float Kp, float Ki, float Kd) {
+    pid_params.Kp = Kp;
+    pid_params.Ki = Ki;
+    pid_params.Kd = Kd;
+    
+    // 적분 리셋
+    pid_state.integral = 0.0f;
+    
+    printf("[PosCtrl] PID updated: Kp=%.2f, Ki=%.2f, Kd=%.2f\n", 
+           Kp, Ki, Kd);
+}
+
+// ========== 제어 모드 ==========
+int PositionControl_Enable(void) {
+    control_enabled = true;
+    pid_state.integral = 0.0f;  // 적분 리셋
+    printf("[PosCtrl] Enabled\n");
+    return POS_CTRL_OK;
+}
+
+void PositionControl_Disable(void) {
+    control_enabled = false;
+    PulseControl_Stop();
+    printf("[PosCtrl] Disabled\n");
+}
+
+void PositionControl_Reset(void) {
+    pid_state.integral = 0.0f;
+    pid_state.prev_error = 0.0f;
+    state.target_angle = 0.0f;
+    printf("[PosCtrl] Reset\n");
+}
+
+// ========== 안전 기능 ==========
+bool PositionControl_CheckSafety(void) {
+    // 각도 범위 체크
+    if (state.current_angle > MAX_ANGLE_DEG + 5.0f || 
+        state.current_angle < MIN_ANGLE_DEG - 5.0f) {
+        printf("[PosCtrl] ERROR: Angle out of range! %.2f\n", 
+               state.current_angle);
+        return false;
+    }
+    
+    // 오차가 너무 큰 경우
+    if (fabsf(state.error) > 60.0f) {
+        printf("[PosCtrl] ERROR: Error too large! %.2f\n", 
+               state.error);
+        return false;
+    }
+    
+    return true;
+}
+
+void PositionControl_EmergencyStop(void) {
+    control_enabled = false;
+    PulseControl_Stop();
+    pid_state.integral = 0.0f;
+    printf("[PosCtrl] EMERGENCY STOP!\n");
+}
+
+// ========== 디버깅 ==========
+void PositionControl_PrintStatus(void) {
+    printf("[PosCtrl] Target:%.2f Current:%.2f Error:%.2f Out:%.0f %s\n",
+           state.target_angle,
+           state.current_angle,
+           state.error,
+           state.output,
+           state.is_stable ? "STABLE" : "");
 }
