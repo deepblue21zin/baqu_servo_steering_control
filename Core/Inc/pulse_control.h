@@ -1,54 +1,48 @@
-/**
- * @file pulse_control.h
- * @brief Pulse/PWM control for servo motor driver
+/*
+ * pulse_control.h
+ *
+ * Created on: 2026.01.19.
+ * Author: 고진성
+ * Function: STM32 to L7 Servo Drive Pulse Generation
+ * Hardware: NUCLEO-F767ZI -> SN75176 -> L7 Servo Drive
  */
 
-#ifndef PULSE_CONTROL_H
-#define PULSE_CONTROL_H
+#ifndef INC_PULSE_CONTROL_H_
+#define INC_PULSE_CONTROL_H_
 
-#include "main.h"
-#include <stdint.h>
+#include "stm32f4xx_hal.h"
 
-/* ========== Functions ========== */
+// 서보 모터 방향 정의
+typedef enum {
+    DIR_CW = 0,   // 시계 방향 (Clockwise)
+    DIR_CCW = 1   // 반시계 방향 (Counter-Clockwise)
+} MotorDirection;
 
 /**
- * @brief Initialize pulse control module
- */
+  * @brief 펄스 제어 모듈 초기화
+  * @param htim TIM1 핸들러 주소
+  */
 void PulseControl_Init(void);
 
 /**
- * @brief Set pulse frequency (Hz)
- * @param freq_hz Frequency in Hz (positive=CW, negative=CCW, 0=stop)
- */
-void PulseControl_SetFrequency(int32_t freq_hz);
+  * @brief 특정 개수만큼의 펄스를 전송 (위치 제어 핵심 함수)
+  * @param steps 전송할 펄스 개수 (Distance)
+  * @param dir 회전 방향 (Direction)
+  */
+void PulseControl_SendSteps(uint32_t steps, MotorDirection dir);
 
 /**
- * @brief Stop pulse output
- */
+  * @brief 펄스 전송 즉시 중지 (비상 정지용)
+  */
 void PulseControl_Stop(void);
 
 /**
- * @brief Get current pulse frequency
- * @return Current frequency in Hz
- */
-int32_t PulseControl_GetCurrentFreq(void);
-
-/**
- * @brief Check if pulse module is initialized
- * @return 1 if initialized, 0 otherwise
- */
-uint8_t PulseControl_IsInitialized(void);
-
-/**
- * @brief Output pulses in forward direction (CW)
- * @param count Number of pulses to output
- */
+  * @brief 현재 모터가 동작 중인지 확인
+  * @return 1: 동작 중, 0: 대기 중
+  */
+uint8_t PulseControl_IsBusy(void);
 void pulse_forward(uint32_t count);
-
-/**
- * @brief Output pulses in reverse direction (CCW)
- * @param count Number of pulses to output
- */
 void pulse_reverse(uint32_t count);
+void PulseControl_SetFrequency(int32_t freq_hz);
 
-#endif /* PULSE_CONTROL_H */
+#endif /* INC_PULSE_CONTROL_H_ */
