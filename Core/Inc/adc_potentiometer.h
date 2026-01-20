@@ -8,7 +8,8 @@
 #ifndef ADC_POTENTIOMETER_H
 #define ADC_POTENTIOMETER_H
 
-#include "stm32f7xx_hal.h"
+#include "main.h"
+#include <stdint.h>
 
 /* ========== Configuration ========== */
 

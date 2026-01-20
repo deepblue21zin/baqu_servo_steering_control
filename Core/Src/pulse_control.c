@@ -23,16 +23,52 @@ static TIM_HandleTypeDef *p_htim1;
 static volatile uint32_t remaining_steps = 0;
 static volatile uint8_t is_busy = 0;
 
+extern TIM_HandleTypeDef htim1;
 /**
   * @brief 펄스 제어 초기화
   */
-void PulseControl_Init(TIM_HandleTypeDef *htim) {
-    p_htim1 = htim;
+void PulseControl_Init(void) {
+	p_htim1 = &htim1;
     is_busy = 0;
-    
+
     // 방향 핀 초기 상태 설정 (Safety)
     // CubeMX(main.c)에서 PE11을 GPIO_Output으로 설정했는지 꼭 확인하세요.
     HAL_GPIO_WritePin(DIR_GPIO_PORT, DIR_PIN, GPIO_PIN_RESET);
+}
+/**
+  * @brief 정방향 펄스 전송 (main.c 호환용)
+  */
+void pulse_forward(uint32_t count) {
+    // DIR_CW 또는 DIR_CCW는 pulse_control.h에 정의된 enum 값을 따르세요.
+    // 보통 CW를 정방향으로 사용합니다.
+    PulseControl_SendSteps(count, DIR_CW);
+}
+
+/**
+  * @brief 역방향 펄스 전송 (main.c 호환용)
+  */
+void pulse_reverse(uint32_t count) {
+    PulseControl_SendSteps(count, DIR_CCW);
+}
+
+/**
+  * @brief 주파수(속도) 설정 (main.c/position_control.c 호환용)
+  */
+void PulseControl_SetFrequency(int32_t freq_hz) {
+    if (freq_hz < 0) freq_hz = -freq_hz; // 음수 처리
+    if (freq_hz == 0) {
+        HAL_TIM_PWM_Stop_IT(p_htim1, TIM_CHANNEL_1);
+        return;
+    }
+
+    // 주파수 계산: 주파수 = 타이머클럭 / ((PSC+1) * (ARR+1))
+    // 간단히 Period(ARR) 값만 변경하여 속도를 조절하는 예시입니다.
+    uint32_t timer_clk = 180000000; // STM32F429 TIM1 클럭 (예시: 180MHz)
+    uint32_t psc = p_htim1->Instance->PSC;
+    uint32_t arr = (timer_clk / ((psc + 1) * freq_hz)) - 1;
+
+    __HAL_TIM_SET_AUTORELOAD(p_htim1, arr);
+    __HAL_TIM_SET_COMPARE(p_htim1, TIM_CHANNEL_1, arr / 2); // Duty 50%
 }
 
 /**
