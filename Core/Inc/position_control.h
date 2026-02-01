@@ -10,18 +10,18 @@
 #include "relay_control.h"
 #include "homing.h"
 
-// ========== 상수 정의 ==========
+// ========== 상수 정의 ==========//
 #define CONTROL_PERIOD_MS       1       // 제어 주기 1ms
 #define MAX_ANGLE_DEG          45.0f    // 최대 조향 각도
 #define MIN_ANGLE_DEG         -45.0f    // 최소 조향 각도
 #define POSITION_TOLERANCE     0.5f     // 위치 허용 오차 (도)
 
 //PID 기본값
-#define DEFAULT_KP             2.0f
-#define DEFAULT_KI             0.1f
-#define DEFAULT_KD             0.5f
-#define DEFAULT_INTEGRAL_LIMIT 10.0f
-#define DEFAULT_OUTPUT_LIMIT   100.0f  //최대 출력 (펄스 주파수) PWM 듀티 사이클%
+#define DEFAULT_KP             500.0f
+#define DEFAULT_KI             5.0f
+#define DEFAULT_KD             20.0f
+#define DEFAULT_INTEGRAL_LIMIT 1000.0f
+#define DEFAULT_OUTPUT_LIMIT   10000.0f  //최대 출력 (펄스 주파수) PWM 듀티 사이클%
 
 //안정화 판정
 #define STABLE_ERROR_THRESHOLD  0.5f   //오차 허용 범위 (도)
