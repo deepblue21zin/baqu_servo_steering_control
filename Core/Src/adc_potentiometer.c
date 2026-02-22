@@ -4,12 +4,12 @@
  * @author Person C
  */
 
-#include "main.h"
+
 #include "adc.h"
 #include "adc_potentiometer.h"
 #include <stdio.h>
 #include <stdint.h>
-#include <stdlib.h>
+
 
 
 /* ========== Private Variables ========== */

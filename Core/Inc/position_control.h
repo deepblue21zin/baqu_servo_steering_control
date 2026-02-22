@@ -1,14 +1,10 @@
 #ifndef POSITION_CONTROL_H
 #define POSITION_CONTROL_H
 
-#include "main.h"
+
 #include <stdint.h>   // uint32_t, int32_t 등
 #include <stdbool.h>  // bool, true, false
 
-#include "encoder_reader.h"
-#include "pulse_control.h"
-#include "relay_control.h"
-#include "homing.h"
 
 // ========== 상수 정의 ==========//
 #define CONTROL_PERIOD_MS       1       // 제어 주기 1ms

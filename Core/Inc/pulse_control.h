@@ -10,7 +10,7 @@
 #ifndef INC_PULSE_CONTROL_H_
 #define INC_PULSE_CONTROL_H_
 
-#include "stm32f4xx_hal.h"
+#include <stdint.h>
 
 // 서보 모터 방향 정의
 typedef enum {

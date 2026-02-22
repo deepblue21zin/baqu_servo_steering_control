@@ -19,6 +19,8 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "adc.h"
+#include "iwdg.h"
+#include "lwip.h"
 #include "tim.h"
 #include "usart.h"
 #include "gpio.h"
@@ -29,6 +31,8 @@
 #include "relay_control.h"
 #include "encoder_reader.h"
 #include "position_control.h"
+#include "homing.h"
+#include "adc_potentiometer.h"
 #include <string.h>
 #include <stdio.h>
 /* USER CODE END Includes */
@@ -51,6 +55,7 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+extern volatile uint8_t interrupt_flag;
 
 /* USER CODE END PV */
 
@@ -98,49 +103,61 @@ int main(void)
   MX_USART1_UART_Init();
   MX_ADC1_Init();
   MX_TIM1_Init();
-  MX_TIM2_Init();
+  MX_IWDG_Init();
+  MX_TIM4_Init();
+  //MX_LWIP_Init();
   /* USER CODE BEGIN 2 */
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
-  HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
+  
+  HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
 
   Relay_Init();
   PulseControl_Init();
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
   EncoderReader_Init();
   PositionControl_Init();
+
+  Relay_ServoOn();
+  HAL_Delay(1000);
 
   char msg[] = "Servo Start!\r\n";
   HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 100);
 
-
+  //Homing_Init(); // 초기 위치로 이동 (예: 0도)
+  //ADC_Pot_Init(NULL); // ADC 포텐셔미터 초기화 (필요 시)
+  //Homing_FindZero();  
+  //if (!Homing_IsComplete()) {
+  //    printf("[Main] Homing failed!\n");
+  //    while (1);
+  //}
+  //HAL_Delay(500);
+  EncoderReader_Reset(); // 엔코더 카운터 리셋 (0점 기준)
+  PositionControl_SetTarget(10.0f);
+  PositionControl_Enable();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  uint32_t debug_cnt = 0;
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  uint32_t count = __HAL_TIM_GET_COUNTER(&htim2);
+    // PID 제어 (1ms 주기, SysTick interrupt_flag 기반)
+    if (interrupt_flag) {
+        interrupt_flag = 0;
+        PositionControl_Update();
 
-	  // SVON ON
-	  Relay_ServoOn();
-	  HAL_Delay(500);
+        // 디버그 출력 (100ms 주기 = 1ms × 100회)
+        if (++debug_cnt >= 100) {
+            debug_cnt = 0;
+            PositionControl_PrintStatus();
+        }
+    }
 
-	  // Forward
-	  pulse_forward(5000);
-	  HAL_UART_Transmit(&huart3, (uint8_t*)"Forward\r\n", 9, 100);
-	  HAL_Delay(1000);
-
-	  // Reverse
-	  pulse_reverse(5000);
-	  HAL_UART_Transmit(&huart3, (uint8_t*)"Reverse\r\n", 9, 100);
-	  HAL_Delay(1000);
-
-	  // SVON OFF
-	  Relay_ServoOff();
-	  HAL_Delay(2000);
+    // 워치독 리프레시
+    HAL_IWDG_Refresh(&hiwdg);
   }
   /* USER CODE END 3 */
 }
@@ -162,8 +179,9 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_BYPASS;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = 4;

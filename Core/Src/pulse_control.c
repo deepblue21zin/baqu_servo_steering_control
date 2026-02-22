@@ -12,13 +12,10 @@
  */
 
 #include "pulse_control.h"
+#include "tim.h"
 
-// =========================================================
-// [하드웨어 설정] 회로도 기반 확정 (PE11)
-// =========================================================
-#define DIR_GPIO_PORT   GPIOE
-#define DIR_PIN         GPIO_PIN_11
-// =========================================================
+
+
 
 static TIM_HandleTypeDef *p_htim1;
 static volatile uint32_t remaining_steps = 0;
@@ -35,7 +32,7 @@ void PulseControl_Init(void) {
 
     // 방향 핀 초기 상태 설정 (Safety)
     // CubeMX(main.c)에서 PE11을 GPIO_Output으로 설정했는지 꼭 확인하세요.
-    HAL_GPIO_WritePin(DIR_GPIO_PORT, DIR_PIN, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(DIR_PIN_GPIO_Port, DIR_PIN_Pin, GPIO_PIN_RESET);
 }
 
 /**
@@ -71,9 +68,9 @@ void PulseControl_SetFrequency(int32_t freq_hz) {
     // 2. 방향 제어 (가장 중요!)
     // freq_hz가 양수면 CW, 음수면 CCW (하드웨어 연결에 따라 반대일 수 있음)
     if (freq_hz > 0) {
-        HAL_GPIO_WritePin(DIR_GPIO_PORT, DIR_PIN, GPIO_PIN_SET);   // 정방향
+        HAL_GPIO_WritePin(DIR_PIN_GPIO_Port, DIR_PIN_Pin, GPIO_PIN_SET);   // 정방향
     } else {
-        HAL_GPIO_WritePin(DIR_GPIO_PORT, DIR_PIN, GPIO_PIN_RESET); // 역방향
+        HAL_GPIO_WritePin(DIR_PIN_GPIO_Port, DIR_PIN_Pin, GPIO_PIN_RESET); // 역방향
         freq_hz = -freq_hz; // 주파수 계산을 위해 양수로 변환
     }
 
@@ -88,8 +85,13 @@ void PulseControl_SetFrequency(int32_t freq_hz) {
     uint32_t timer_clk = 180000000; 
     uint32_t psc = p_htim1->Instance->PSC;
     
+    
+    
     // 0으로 나누기 방지
     uint32_t arr = (timer_clk / ((psc + 1) * freq_hz)) - 1;
+
+    if (arr > 0xFFFF) arr = 0xFFFF; //16비트 한계
+    if (arr < 1) arr = 1; //최소값 보장 (0 방지)범위 보호
 
     // 5. 레지스터 업데이트 (주파수 및 듀티비 50% 설정)
     __HAL_TIM_SET_AUTORELOAD(p_htim1, arr);
@@ -112,9 +114,9 @@ void PulseControl_SendSteps(uint32_t steps, MotorDirection dir) {
     // [방향 제어]
     // PE11 핀의 High/Low 상태로 SN75176을 통해 L7 드라이브의 방향을 결정
     if (dir == DIR_CW) {
-        HAL_GPIO_WritePin(DIR_GPIO_PORT, DIR_PIN, GPIO_PIN_SET);   // CW
+        HAL_GPIO_WritePin(DIR_PIN_GPIO_Port, DIR_PIN_Pin, GPIO_PIN_SET);   // CW
     } else {
-        HAL_GPIO_WritePin(DIR_GPIO_PORT, DIR_PIN, GPIO_PIN_RESET); // CCW
+        HAL_GPIO_WritePin(DIR_PIN_GPIO_Port, DIR_PIN_Pin, GPIO_PIN_RESET); // CCW
     }
 
     // [펄스 발사]
