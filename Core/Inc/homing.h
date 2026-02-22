@@ -8,7 +8,7 @@
 #ifndef HOMING_H
 #define HOMING_H
 
-#include "main.h"
+
 #include <stdint.h>
 
 /* ========== Status ========== */

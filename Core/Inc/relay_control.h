@@ -6,7 +6,7 @@
 #ifndef RELAY_CONTROL_H
 #define RELAY_CONTROL_H
 
-#include "main.h"
+
 
 /* ========== Pin Definitions (Define in main.h) ========== */
 // #define SVON_PORT GPIOA

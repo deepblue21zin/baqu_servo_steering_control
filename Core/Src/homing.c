@@ -41,7 +41,7 @@ int Homing_FindZero(void)
 
     // 3. Set encoder offset to match potentiometer angle
     // Convert angle to encoder count
-    int32_t offset_count = (int32_t)(pot_angle * ENCODER_PPR / FULL_ROTATION_DEG);
+    int32_t offset_count = (int32_t)(pot_angle * ENCODER_COUNT_PER_REV / FULL_ROTATION_DEG);
     EncoderReader_SetOffset(offset_count);
 
     homing_status = HOMING_STATUS_COMPLETE;
