@@ -7,6 +7,9 @@
 #include "tim.h"
 #include <stdio.h>
 
+#define ENCODER_TIMER htim4
+#define ENCODER_MAX_COUNT 65535   // 16비트
+
 static int32_t encoder_count = 0;
 static int32_t encoder_offset = 0;
 static uint8_t initialized = 0;
@@ -20,6 +23,7 @@ static uint8_t initialized = 0;
 int EncoderReader_Init(void) {
     encoder_count = 0;
     encoder_offset = 0;
+    __HAL_TIM_SET_COUNTER(&ENCODER_TIMER, 32768);  // 중간값에서 시작 (오버플로우 여유)
     initialized = 1;
     printf("[Encoder] Initialized\n");
     return 0;
@@ -27,19 +31,21 @@ int EncoderReader_Init(void) {
 
 float EncoderReader_GetAngleDeg(void) {
     // 먼저 카운터 값을 읽어서 업데이트
-    encoder_count = (int32_t)__HAL_TIM_GET_COUNTER(&htim2);
+    uint16_t raw = __HAL_TIM_GET_COUNTER(&ENCODER_TIMER);
+    encoder_count = (int32_t)raw - 32768;  // 16비트 카운터 값 읽기 (0~65535)
     int32_t adjusted_count = encoder_count - encoder_offset;
     return (float)adjusted_count * DEG_PER_COUNT;
 }
-
+//중요 : TIM4는 16비트이므로 TIM2(32비트)에서 사용하던 방식으로 카운터 값을 읽으면 오버플로우 문제가 발생할 수 있습니다. 따라서 TIM4의 카운터 값을 읽을 때는 16비트 범위 내에서 처리해야 합니다. 위 코드에서는 32768을 빼서 -32768 ~ +32767 범위로 조정한 후, 오프셋을 적용하여 각도를 계산합니다.
 int32_t EncoderReader_GetCount(void) {
-    // TIM2 하드웨어 카운터에서 직접 읽기
-    encoder_count = (int32_t)__HAL_TIM_GET_COUNTER(&htim2);
+    // TIM4 하드웨어 카운터에서 직접 읽기
+    uint16_t raw = __HAL_TIM_GET_COUNTER(&ENCODER_TIMER);
+    encoder_count = (int32_t)raw - 32768;
     return encoder_count;
 }
 
 void EncoderReader_Reset(void) {
-    __HAL_TIM_SET_COUNTER(&htim2, 0);  // TIM2 카운터 리셋
+    __HAL_TIM_SET_COUNTER(&ENCODER_TIMER, 32768);  // TIM4 카운터 중간값으로 리셋
     encoder_count = 0;
     encoder_offset = 0;
     printf("[Encoder] Reset\n");

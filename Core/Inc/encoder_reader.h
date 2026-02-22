@@ -6,7 +6,7 @@
 #ifndef ENCODER_READER_H
 #define ENCODER_READER_H
 
-#include "main.h"
+
 #include <stdint.h>
 
 /* ========== Functions ========== */

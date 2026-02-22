@@ -8,13 +8,13 @@
 #ifndef ADC_POTENTIOMETER_H
 #define ADC_POTENTIOMETER_H
 
-#include "main.h"
+
 #include <stdint.h>
+#include "main.h"
 
 /* ========== Configuration ========== */
 
-// ADC handle (extern from main.c)
-extern ADC_HandleTypeDef hadc1;
+
 
 /* ========== Structures ========== */
 
