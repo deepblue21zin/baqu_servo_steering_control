@@ -37,6 +37,7 @@ static PositionControl_State_t state = {
 };
 
 static volatile bool control_enabled = false;
+static volatile ControlMode_t control_mode = CTRL_MODE_IDLE;
 static PosCtrl_Stats_t stats = {0};
 
 // ========== 초기화 ==========
@@ -51,6 +52,8 @@ int PositionControl_Init(void) {
     state.target_angle = 0.0f;
     state.current_angle = 0.0f;
     control_enabled = false; //제어 비활성화 상태로 시작, 안전장치, Enable() 함수를 명시적으로 호출해야 제어 시작
+    control_mode = CTRL_MODE_IDLE;
+    state.mode = CTRL_MODE_IDLE;
 
     printf("[PosCtrl] Initialized\n");
     return POS_CTRL_OK;  // 성공
@@ -200,16 +203,19 @@ void PositionControl_SetPID(float Kp, float Ki, float Kd) {
 
 // ========== 제어 모드 ==========
 void PositionControl_SetMode(ControlMode_t mode) {
-    // 현재는 단일 모드만 지원
-    (void)mode; // 미사용 변수 경고 방지
+    control_mode = mode;
+    state.mode = mode;
 }
 ControlMode_t PositionControl_GetMode(void) {
-    return CTRL_MODE_POSITION;
+    return control_mode;
 }
 
 int PositionControl_Enable(void) {
     control_enabled = true;
     fault_flag = 0;              // EmergencyStop 후 재활성화 시 fault 초기화
+    control_mode = CTRL_MODE_POSITION;
+    state.mode = CTRL_MODE_POSITION;
+    Relay_EmergencyRelease();
 
     // [BUG FIX] D항 킥 방지 (Derivative Kick Prevention)
     // 기존: prev_error=0으로 초기화 → 첫 호출 시 D=(error-0)/0.001=10000 → d_term=200000 → MAX cap
@@ -223,16 +229,21 @@ int PositionControl_Enable(void) {
 }
 
 void PositionControl_Disable(void) {
+    if (!control_enabled) {
+        return;
+    }
     control_enabled = false;
+    control_mode = CTRL_MODE_IDLE;
+    state.mode = CTRL_MODE_IDLE;
     PulseControl_Stop();
-    printf("[PosCtrl] Disabled\n");
+    printf("[PosCtrl] Disabled\r\n");
 }
 
 void PositionControl_Reset(void) {
     pid_state.integral = 0.0f;
     pid_state.prev_error = 0.0f;
     state.target_angle = 0.0f;
-    printf("[PosCtrl] Reset\n");
+    printf("[PosCtrl] Reset\r\n");
 }
 
 // ========== 안전 기능 ==========
@@ -265,14 +276,14 @@ bool PositionControl_IsSafe(void) {
 
 void PositionControl_EmergencyStop(void) {
     control_enabled = false;
+    control_mode = CTRL_MODE_EMERGENCY;
+    state.mode = CTRL_MODE_EMERGENCY;
     PulseControl_Stop();
     pid_state.integral = 0.0f;
+    Relay_Emergency();
     // [수정] fault 상세 원인 출력 (fault_flag: 1=각도범위초과, 2=오차초과)
     printf("[PosCtrl] EMERGENCY STOP! FLT=%d Ang:%.1f Err:%.1f\r\n",
            (int)fault_flag, state.current_angle, state.error);
-    // EMG 릴레이 24V 미연결 상태이므로 Relay_Emergency() 호출 안 함.
-    // P2-02 EMG 기능 비활성화 상태이므로 드라이브에도 영향 없음.
-    // 재활성화: PositionControl_Enable() 재호출로 복구 가능.
 }
 // ========== 성능 모니터링 ==========
 PosCtrl_Stats_t PositionControl_GetStats(void) {

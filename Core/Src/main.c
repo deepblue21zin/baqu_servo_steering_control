@@ -45,6 +45,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define AUTO_FIXED_PULSE_TEST  0
+#define AUTO_FIXED_PULSE_HZ    500000
 
 /* USER CODE END PD */
 
@@ -147,7 +149,7 @@ int main(void)
   //}
   //HAL_Delay(500);
   EncoderReader_Reset(); // 엔코더 카운터 리셋 (0점 기준)
-  PositionControl_SetTarget(10.0f); // 자율주행 모드: 초기 목표 0° (UDP로 갱신됨)
+  PositionControl_SetTarget(0.0f); // 초기 목표 0° (UDP 수신값으로 갱신됨)
   PositionControl_Enable();
 
   EthComm_UDP_Init(); // UDP 수신 소켓 열기 (MX_LWIP_Init 이후 호출 필수)
@@ -166,14 +168,28 @@ int main(void)
     MX_LWIP_Process();
 
     SteerMode_t mode = EthComm_GetCurrentMode();
+    uint32_t now_ms = HAL_GetTick();
+    uint32_t last_rx_ms = EthComm_GetLastRxTick();
+
+    /* ── 통신 타임아웃 fail-safe: AUTO/MANUAL에서 RX 끊기면 ESTOP ── */
+    if ((mode == STEER_MODE_AUTO || mode == STEER_MODE_MANUAL) &&
+        ((now_ms - last_rx_ms) > ETHCOMM_RX_TIMEOUT_MS)) {
+        EthComm_ForceMode(STEER_MODE_ESTOP);
+        mode = STEER_MODE_ESTOP;
+    }
 
     /* ── 모드 전이 처리 ── */
     if (mode == STEER_MODE_ESTOP) {
         if (prev_mode != STEER_MODE_ESTOP) {
             PositionControl_EmergencyStop();
         }
-    } else if (prev_mode == STEER_MODE_ESTOP &&
-               (mode == STEER_MODE_AUTO || mode == STEER_MODE_MANUAL)) {
+    } else if (mode == STEER_MODE_NONE) {
+        if (prev_mode != STEER_MODE_NONE) {
+            PositionControl_Disable();
+        }
+    } else if ((mode == STEER_MODE_AUTO || mode == STEER_MODE_MANUAL) &&
+               (prev_mode == STEER_MODE_NONE || prev_mode == STEER_MODE_ESTOP)) {
+        Relay_EmergencyRelease();
         PositionControl_Enable();
     }
 
@@ -195,7 +211,15 @@ int main(void)
     /* ── 1ms 제어 루프 ── */
     if (interrupt_flag) {
         interrupt_flag = 0;
+#if AUTO_FIXED_PULSE_TEST
+        if (mode == STEER_MODE_AUTO) {
+            PulseControl_SetFrequency(AUTO_FIXED_PULSE_HZ);
+        } else {
+            PulseControl_Stop();
+        }
+#else
         PositionControl_Update();
+#endif
 
         if (++debug_cnt >= 100) {
             uint32_t arr = __HAL_TIM_GET_AUTORELOAD(&htim1);
@@ -204,7 +228,8 @@ int main(void)
             GPIO_PinState dir_state = HAL_GPIO_ReadPin(DIR_PIN_GPIO_Port, DIR_PIN_Pin);
             PositionControl_State_t s = PositionControl_GetState();
             debug_cnt = 0;
-            printf("[DIAG] MODE:%d T:%.2f C:%.2f E:%.2f O:%.0f ARR:%lu CCR:%lu DIR:%d ENC:%lu\r\n",
+            printf("[DIAG] COMM_MODE:%d CTRL_MODE:%d T:%.2f C:%.2f E:%.2f O:%.0f ARR:%lu CCR:%lu DIR:%d ENC:%lu\r\n",
+                   (int)mode,
                    (int)PositionControl_GetMode(),
                    s.target_angle,
                    s.current_angle,
