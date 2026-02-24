@@ -5,7 +5,7 @@
  * Author: 고진성 (Modified by Baqu for PID Support)
  * * [Hardware Pin Map]
  * Pulse Output : PE9  (TIM1_CH1) -> SN75176 -> L7(Pin 9, PF+)
- * Dir Output   : PE11 (GPIO_OUT) -> SN75176 -> L7(Pin 11, PR+)
+ * Dir Output   : PE10 (GPIO_OUT) -> SN75176 -> L7(Pin 11, PR+)
  * * [Logic]
  * 1. Step Mode: TIM1 PWM Interrupt (정해진 거리 이동)
  * 2. Speed Mode: TIM1 Frequency Change (PID 제어용 연속 이동)
@@ -31,7 +31,7 @@ void PulseControl_Init(void) {
     is_busy = 0;
 
     // 방향 핀 초기 상태 설정 (Safety)
-    // CubeMX(main.c)에서 PE11을 GPIO_Output으로 설정했는지 꼭 확인하세요.
+    // CubeMX(main.c)에서 PE10을 GPIO_Output으로 설정했는지 꼭 확인하세요.
     HAL_GPIO_WritePin(DIR_PIN_GPIO_Port, DIR_PIN_Pin, GPIO_PIN_RESET);
 }
 
@@ -112,7 +112,7 @@ void PulseControl_SendSteps(uint32_t steps, MotorDirection dir) {
     remaining_steps = steps;
 
     // [방향 제어]
-    // PE11 핀의 High/Low 상태로 SN75176을 통해 L7 드라이브의 방향을 결정
+    // PE10 핀의 High/Low 상태로 SN75176을 통해 L7 드라이브의 방향을 결정
     if (dir == DIR_CW) {
         HAL_GPIO_WritePin(DIR_PIN_GPIO_Port, DIR_PIN_Pin, GPIO_PIN_SET);   // CW
     } else {
@@ -145,10 +145,13 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim) {
 
 /**
   * @brief 강제 정지
+  * [수정] PID 모드(non-IT)와 Step 모드(IT) 모두 대응:
+  * - Stop_IT → HAL State=READY 후 Stop → State!=BUSY → HAL_ERROR로 상태 꼬이던 문제 해결
+  * - CC 인터럽트를 직접 끄고, HAL_TIM_PWM_Stop 한 번만 호출
   */
 void PulseControl_Stop(void) {
-    HAL_TIM_PWM_Stop_IT(p_htim1, TIM_CHANNEL_1);
-    HAL_TIM_PWM_Stop(p_htim1, TIM_CHANNEL_1); // IT가 아닌 것도 확실히 끔
+    __HAL_TIM_DISABLE_IT(p_htim1, TIM_IT_CC1); // Step 모드 잔여 인터럽트 방지
+    HAL_TIM_PWM_Stop(p_htim1, TIM_CHANNEL_1);  // PWM 출력 정지, HAL State=READY 복구
     remaining_steps = 0;
     is_busy = 0;
 }
