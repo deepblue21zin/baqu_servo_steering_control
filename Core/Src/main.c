@@ -31,6 +31,7 @@
 #include "relay_control.h"
 #include "encoder_reader.h"
 #include "position_control.h"
+#include "ethernet_communication.h"
 #include "homing.h"
 #include "adc_potentiometer.h"
 #include <string.h>
@@ -105,20 +106,34 @@ int main(void)
   MX_TIM1_Init();
   MX_IWDG_Init();
   MX_TIM4_Init();
-  //MX_LWIP_Init();
+  MX_LWIP_Init();
   /* USER CODE BEGIN 2 */
-  
+
+  // PE10(DIR)을 GPIO Output으로 명시 재설정 (방향 신호용)
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  GPIO_InitStruct.Pin = GPIO_PIN_10;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+
   HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
 
-  Relay_Init();
-  PulseControl_Init();
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
+  Relay_Init();        // EMG 핀 HIGH 설정 (릴레이 24V 없어도 GPIO 상태만 설정됨)
+  PulseControl_Init(); // DIR 핀 초기화 (PWM은 여기서 시작하지 않음)
   EncoderReader_Init();
   PositionControl_Init();
 
+  // [BUG FIX] HAL_TIM_PWM_Start 제거:
+  // 이전에 이 줄이 ARR=9(83kHz), DIR=CCW 상태로 PWM을 조기 시작하여
+  // ServoOn 직후 모터가 무제어 역방향 고속 회전하는 문제가 있었음.
+  // PWM은 PulseControl_SetFrequency() 내부에서 방향/속도 설정 후 시작됨.
+
+  // 사용자가 외부에서 항상 SVON ON 상태이므로 코드에서도 ServoOn 호출.
+  // EMG 릴레이는 24V 미연결이므로 Relay_Init()의 GPIO HIGH 설정만 적용됨.
+  // P2-02 EMG 기능 비활성화 상태이므로 드라이브는 EMG DI 무시.
   Relay_ServoOn();
-  HAL_Delay(1000);
+  HAL_Delay(500); // 서보 ON 안정화 대기
 
   char msg[] = "Servo Start!\r\n";
   HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 100);
@@ -132,31 +147,76 @@ int main(void)
   //}
   //HAL_Delay(500);
   EncoderReader_Reset(); // 엔코더 카운터 리셋 (0점 기준)
-  PositionControl_SetTarget(10.0f);
+  PositionControl_SetTarget(10.0f); // 자율주행 모드: 초기 목표 0° (UDP로 갱신됨)
   PositionControl_Enable();
+
+  EthComm_UDP_Init(); // UDP 수신 소켓 열기 (MX_LWIP_Init 이후 호출 필수)
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   uint32_t debug_cnt = 0;
+  SteerMode_t prev_mode = STEER_MODE_NONE;
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    // PID 제어 (1ms 주기, SysTick interrupt_flag 기반)
+    /* ── LwIP 폴링: 이더넷 패킷 수신 처리 ── */
+    MX_LWIP_Process();
+
+    SteerMode_t mode = EthComm_GetCurrentMode();
+
+    /* ── 모드 전이 처리 ── */
+    if (mode == STEER_MODE_ESTOP) {
+        if (prev_mode != STEER_MODE_ESTOP) {
+            PositionControl_EmergencyStop();
+        }
+    } else if (prev_mode == STEER_MODE_ESTOP &&
+               (mode == STEER_MODE_AUTO || mode == STEER_MODE_MANUAL)) {
+        PositionControl_Enable();
+    }
+
+    /* ── PC misc brake 등 one-shot ESTOP 요청 처리 ── */
+    if (EthComm_ConsumeEmergencyRequest()) {
+        PositionControl_EmergencyStop();
+        mode = STEER_MODE_ESTOP;
+    }
+
+    /* ── UDP 수신 데이터 → 모드별 목표 갱신 ── */
+    if (EthComm_HasNewData()) {
+        AutoDrive_Packet_t pkt = EthComm_GetLatestData();
+        if (mode == STEER_MODE_AUTO || mode == STEER_MODE_MANUAL) {
+            PositionControl_SetTarget(pkt.steering_angle);  // degree 기준
+        }
+    }
+    prev_mode = mode;
+
+    /* ── 1ms 제어 루프 ── */
     if (interrupt_flag) {
         interrupt_flag = 0;
         PositionControl_Update();
 
-        // 디버그 출력 (100ms 주기 = 1ms × 100회)
         if (++debug_cnt >= 100) {
+            uint32_t arr = __HAL_TIM_GET_AUTORELOAD(&htim1);
+            uint32_t ccr = __HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_1);
+            uint32_t enc_raw = __HAL_TIM_GET_COUNTER(&htim4);
+            GPIO_PinState dir_state = HAL_GPIO_ReadPin(DIR_PIN_GPIO_Port, DIR_PIN_Pin);
+            PositionControl_State_t s = PositionControl_GetState();
             debug_cnt = 0;
-            PositionControl_PrintStatus();
+            printf("[DIAG] MODE:%d T:%.2f C:%.2f E:%.2f O:%.0f ARR:%lu CCR:%lu DIR:%d ENC:%lu\r\n",
+                   (int)PositionControl_GetMode(),
+                   s.target_angle,
+                   s.current_angle,
+                   s.error,
+                   s.output,
+                   (unsigned long)arr,
+                   (unsigned long)ccr,
+                   (int)dir_state,
+                   (unsigned long)enc_raw);
         }
     }
 
-    // 워치독 리프레시
     HAL_IWDG_Refresh(&hiwdg);
   }
   /* USER CODE END 3 */
