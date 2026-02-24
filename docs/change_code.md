@@ -23,6 +23,12 @@
 | **12** | **2026-02-21** | **main.c** | **debug_cnt 위치 수정 + USER CODE 블록 정리** | **Major** | **완료** |
 | **13** | **2026-02-21** | **CubeMX (.ioc)** | **ETH RMII + LwIP + IWDG + TIM4 Encoder 설정** | **Major** | **완료** |
 | **14** | **2026-02-21** | **main.c** | **초기화 순서 개선 + 테스트 모드 구성** | **Major** | **완료** |
+| **15** | **2026-02-24** | **main.h, main.c, pulse_control.c** | **DIR 핀 PE11→PE10 정합화** | **Critical** | **완료** |
+| **16** | **2026-02-24** | **main.c** | **라인드라이버 단독 검증용 테스트 모드 적용/복구** | **Major** | **완료** |
+| **17** | **2026-02-24** | **ethernet_communication.c/h** | **UDP 포트 5000 적용 + 조향각 degree 검증 범위 정합화(±45°)** | **Major** | **완료** |
+| **18** | **2026-02-24** | **ethernet_communication.c/h, main.c** | **ASMS(5B)/PC(9B) 모드 기반 UDP 파싱 + NONE 모드 Disable 처리** | **Critical** | **완료** |
+| **19** | **2026-02-24** | **main.c, ethernet_communication.c** | **초기 목표각 0° 복구 + 네트워크 입력 범위 ±360°로 조정** | **Major** | **완료** |
+| **20** | **2026-02-24** | **main.c, ethernet_communication.c/h, position_control.c** | **AUTO/MANUAL 입력원 분리 + RX timeout(300ms) ESTOP + EMG 하드정지 복구 + CTRL_MODE 실상태화** | **Critical** | **완료** |
 
 ---
 
@@ -259,11 +265,182 @@ CubeMX가 생성하는 매크로 이름은 `DIR_PIN_GPIO_Port` (소문자 `ort`)
 HAL_GPIO_WritePin(DIR_PIN_GPIO_PORT, DIR_PIN_Pin, GPIO_PIN_RESET);  // 4개소 모두
 ```
 
-### 변경 후
+---
+
+## 변경 #15: DIR 핀 PE11 → PE10 정합화
+
+**날짜:** 2026-02-24  
+**파일:** `Core/Inc/main.h`, `Core/Src/main.c`, `Core/Src/pulse_control.c`  
+**심각도:** Critical
+
+### 변경 이유
+
+- `.ioc`의 DIR 라벨은 PE10인데, 코드/문서 일부가 PE11 기준으로 남아 있어 배선과 코드 해석에 혼선 발생
+- 실제 현장 검증 시 DIR 핀 불일치가 원인 분석을 지연시킴
+
+### 변경 후 요약
+
+- `DIR_PIN_Pin`을 `GPIO_PIN_10`으로 정합화
+- `main.c`의 USER CODE GPIO 재설정 핀도 `GPIO_PIN_10`으로 변경
+- `pulse_control.c` 하드웨어 주석을 PE10으로 갱신
+
+### 영향 범위
+
+- DIR 신호 경로가 `.ioc`/코드/문서에서 동일해짐
+- CubeMX 재생성 후 핀 정합성 검증이 단순해짐
+
+---
+
+## 변경 #16: 라인드라이버 단독 검증용 테스트 모드 적용/복구
+
+**날짜:** 2026-02-24  
+**파일:** `Core/Src/main.c`  
+**심각도:** Major
+
+### 변경 이유
+
+- 모터 미동작 원인 분리를 위해 PID/UDP 경로를 잠시 분리하고 PF 펄스 출력만 단독 검증 필요
+
+### 작업 내용
+
+1. 테스트 모드 적용: PID/UDP 루프 비활성화 + 고정 500Hz 출력
+2. 테스트 확장: 500→2000→5000Hz 자동 스윕 추가
+3. 검증 완료 후 운영 모드 복구: Ethernet + PID 루프 재활성화
+
+### 영향 범위
+
+- 라인드라이버/배선 검증과 제어 로직 검증을 분리 가능
+- 현재 기준 main 루프는 운영 모드(UDP 수신 + 1ms PID)로 복귀 완료
+
+---
+
+## 변경 #17: UDP 포트 5000 적용 + degree 검증 범위 정합화
+
+**날짜:** 2026-02-24  
+**파일:** `Core/Inc/ethernet_communication.h`, `Core/Src/ethernet_communication.c`  
+**심각도:** Major
+
+### 변경 이유
+
+- 상위 송신기 레거시 명세(Arduino 참고 코드) 포트가 5000이므로 수신 포트 일치 필요
+- 조향 명령 단위를 degree로 운영하기 위해 수신값 유효 범위를 추가
+
+### 변경 전/후
 
 ```c
-HAL_GPIO_WritePin(DIR_PIN_GPIO_Port, DIR_PIN_Pin, GPIO_PIN_RESET);  // 4개소 모두
+// before
+#define AUTODRIVE_UDP_PORT    7000
+if (pkt.steering_angle < -90.0f || pkt.steering_angle > 90.0f) { ... }
+
+// after
+#define AUTODRIVE_UDP_PORT    5000
+if (pkt.steering_angle < -45.0f || pkt.steering_angle > 45.0f) { ... }
 ```
+
+### 영향 범위
+
+- 송신측 UDP 포트 불일치로 인한 수신 실패 리스크 감소
+- 비정상 각도 패킷 조기 차단으로 안전성 향상
+
+---
+
+## 변경 #18: ASMS(5B)/PC(9B) 모드 기반 UDP 파싱 + NONE 모드 Disable 처리
+
+**날짜:** 2026-02-24  
+**파일:** `Core/Inc/ethernet_communication.h`, `Core/Src/ethernet_communication.c`, `Core/Src/main.c`  
+**심각도:** Critical
+
+### 변경 이유
+
+- 기존 `AutoDrive_Packet_t(17B)` 기반 파싱은 최신 송신 명세(ASMS 5B / PC 9B)와 불일치
+- `NONE` 모드에서 제어가 유지될 수 있는 위험을 차단할 필요
+
+### 변경 후 요약
+
+- UDP 콜백에서 **패킷 길이 + 발신자 IP** 기준 분기
+  - ASMS(5B, .5): 모드 갱신 + MANUAL일 때 joy_y 반영
+  - PC(9B, .1): AUTO일 때만 steer 반영, misc bit7은 ESTOP 요청
+- main 루프 모드 처리 추가
+  - `STEER_MODE_NONE` → `PositionControl_Disable()`
+  - `STEER_MODE_ESTOP` → `PositionControl_EmergencyStop()`
+
+### 영향 범위
+
+- 통신 명세와 수신 파서 동기화
+- 모드 전이 시 의도치 않은 조향 유지 위험 완화
+
+---
+
+## 변경 #19: 초기 목표각 0° 복구 + 네트워크 입력 범위 ±360° 조정
+
+**날짜:** 2026-02-24  
+**파일:** `Core/Src/main.c`, `Core/Src/ethernet_communication.c`  
+**심각도:** Major
+
+### 변경 이유
+
+- 부팅 직후 목표각이 10°로 설정되어 통신 전에도 조향이 동작할 수 있었음
+- 운영 정책에 맞춰 네트워크 입력 한계를 ±360°로 확장 필요
+
+### 변경 전/후
+
+```c
+// before
+PositionControl_SetTarget(10.0f);
+clamp_deg: [-45, +45]
+joy_to_deg: [-45, +45] 매핑
+
+// after
+PositionControl_SetTarget(0.0f);
+clamp_deg: [-360, +360]
+joy_to_deg: [-360, +360] 매핑
+```
+
+### 영향 범위
+
+- 기동 시 초기 조향 안정성 개선
+- 통신 입력 스케일 정책과 제어기 제한값 일관성 확보
+
+---
+
+## 변경 #20: AUTO/MANUAL 입력원 분리 + RX timeout ESTOP + EMG 하드정지 복구
+
+**날짜:** 2026-02-24  
+**파일:** `Core/Src/main.c`, `Core/Src/ethernet_communication.c`, `Core/Inc/ethernet_communication.h`, `Core/Src/position_control.c`  
+**심각도:** Critical
+
+### 변경 이유
+
+- AUTO 모드에서는 PC steer만, MANUAL 모드에서는 ASMS joy_y만 반영하도록 입력원 분리 필요
+- 통신 끊김 시 안전정지(ESTOP) 누락 리스크 존재
+- `PositionControl_GetMode()`가 고정값 반환이라 진단값 신뢰성 부족
+- `EmergencyStop()`에서 EMG 하드웨어 정지가 비활성 주석 상태
+
+### 변경 후 요약
+
+1. **입력원 분리**
+- ASMS(5B, sender=.5): mode + MANUAL 조향 입력 처리
+- PC(9B, sender=.1): AUTO 모드에서 steer 처리
+
+2. **통신 워치독**
+- `ETHCOMM_RX_TIMEOUT_MS=300` 추가
+- `AUTO/MANUAL` 상태에서 `last_rx_tick` 초과 시 `ESTOP` 강제 전이
+
+3. **모드 진단 정합**
+- `control_mode` 내부 상태 변수 도입
+- Enable/Disable/Emergency/SetMode에서 갱신
+- `PositionControl_GetMode()`는 실상태 반환
+
+4. **기능안전 복구**
+- `PositionControl_EmergencyStop()`에서 `Relay_Emergency()` 실제 호출
+- 제어 재활성화 시 `Relay_EmergencyRelease()` 수행
+
+### 영향 범위
+
+- AUTO/MANUAL 동작 의미가 명확해져 인지/수동 입력 경로 혼선 제거
+- 통신 단절 시 fail-safe 확보 (300ms)
+- DIAG의 `CTRL_MODE` 신뢰성 개선
+- ESTOP 시 소프트 정지 + 하드웨어 EMG 동시 보장
 
 ---
 
@@ -447,7 +624,7 @@ HAL_Delay(1000);
 // MX_LWIP_Init();  // 이더넷 테스트 전이므로 주석처리
 // Homing 블록 전체 주석처리 (테스트 모드)
 EncoderReader_Reset();                             // 현재 위치를 0도 기준으로
-PositionControl_SetTarget(10.0f);                  // 안전한 각도 (10도)
+PositionControl_SetTarget(0.0f);                   // 기동 초기 목표각 0도
 PositionControl_Enable();
 ```
 

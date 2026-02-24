@@ -4,32 +4,17 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-/* =========================================================
- * [TODO: 인지파트 확인 필요]
- * AUTODRIVE_UDP_PORT : 인지파트가 브로드캐스트하는 UDP 포트 번호
- * AutoDrive_Packet_t : 실제 패킷 구조와 일치하도록 수정
- * ========================================================= */
-
 /* UDP 포트 번호 (레거시 송신기 규격: 5000) */
 #define AUTODRIVE_UDP_PORT    5000
+#define ETHCOMM_RX_TIMEOUT_MS 300U
 
-/* 패킷 식별자 */
-#define AUTODRIVE_PKT_HEADER  0xAA
-#define AUTODRIVE_MSG_CTRL    0x01   /* 속도·조향·ASMS 통합 제어 메시지 */
-
-/* 자율주행 통합 패킷 구조체 (총 20 bytes)
- * -- 인지파트의 실제 포맷과 다르면 필드/순서/크기를 수정할 것 -- */
-#pragma pack(push, 1)
+/* 내부 정규화 데이터:
+ * - ASMS 5B(mode + joystick), PC 9B(<iIB>)를 파싱해 공통 포맷으로 저장 */
 typedef struct {
-    uint8_t  header;          /* 0xAA : 패킷 시작 식별자          */
-    uint8_t  msg_type;        /* 0x01 : 제어 메시지 타입           */
-    float    steering_angle;  /* 조향각  [deg]  -45.0 ~ +45.0    */
-    float    speed;           /* 목표속도 [m/s]                   */
-    float    asms;            /* ASMS 값                         */
-    uint8_t  flags;           /* 비트 플래그 (bit0=비상정지 등)    */
-    uint16_t checksum;        /* XOR 체크섬 (0이면 무시)           */
-} AutoDrive_Packet_t;         /* 합계: 1+1+4+4+4+1+2 = 17 bytes  */
-#pragma pack(pop)
+    float    steering_angle;  /* degree, clamp: [-360, +360] */
+    uint32_t speed;           /* PC speed raw */
+    uint8_t  misc;            /* PC misc raw  */
+} AutoDrive_Packet_t;
 
 typedef enum {
     ETH_COMM_OK = 0,
@@ -82,5 +67,7 @@ bool EthComm_HasNewData(void);
 AutoDrive_Packet_t EthComm_GetLatestData(void);
 SteerMode_t EthComm_GetCurrentMode(void);
 bool EthComm_ConsumeEmergencyRequest(void);
+uint32_t EthComm_GetLastRxTick(void);
+void EthComm_ForceMode(SteerMode_t mode);
 
 #endif /* INC_ETHERNET_COMMUNICATION_H_ */
