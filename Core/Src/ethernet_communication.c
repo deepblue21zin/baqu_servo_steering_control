@@ -16,6 +16,9 @@
 #include "position_control.h"
 #include "pulse_control.h"
 #include "relay_control.h"
+#include "lwip/udp.h"
+#include "lwip/pbuf.h"
+#include "lwip/ip_addr.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -288,4 +291,170 @@ static int EthComm_SendStatus(void)
 
     /* TODO: 실제 네트워크 전송 함수로 교체 */
     return EthComm_SendString((char *)g_eth.cfg.tx_buffer);
+}
+
+/* ============================================================
+ * UDP 자율주행 수신 구현
+ * ============================================================ */
+
+static struct udp_pcb      *g_udp_pcb   = NULL;
+static AutoDrive_Packet_t   g_latest_pkt;
+static volatile bool        g_new_data  = false;
+static volatile SteerMode_t g_current_mode = STEER_MODE_NONE;
+static volatile bool        g_emergency_request = false;
+
+#define ASMS_IP_LAST_OCTET   5U
+#define PC_IP_LAST_OCTET     1U
+#define ASMS_PACKET_SIZE     5U
+#define PC_PACKET_SIZE       9U
+
+static float clamp_deg(float v)
+{
+    if (v > 45.0f) return 45.0f;
+    if (v < -45.0f) return -45.0f;
+    return v;
+}
+
+static float joy_to_deg(int16_t joy_y)
+{
+    if (joy_y > 2047) joy_y = 2047;
+    if (joy_y < -2048) joy_y = -2048;
+    return clamp_deg((45.0f * (float)joy_y) / 2047.0f);
+}
+
+/**
+ * @brief LwIP가 UDP 패킷 수신 시 자동 호출하는 콜백
+ *
+ * 흐름:
+ *   인지PC 브로드캐스트 → 이더넷 허브 → STM32 NIC
+ *   → LwIP 스택 → ethernetif_input() → udp_input()
+ *   → 이 콜백 호출
+ *
+ * [필터링 로직]
+ *   header == 0xAA   : 우리 시스템 패킷인지 확인
+ *   msg_type == 0x01 : 제어 메시지인지 확인 (속도·조향·ASMS)
+ *   → 두 조건 모두 만족할 때만 g_latest_pkt에 저장
+ */
+static void udp_recv_cb(void *arg,
+                        struct udp_pcb *pcb,
+                        struct pbuf *p,
+                        const ip_addr_t *addr,
+                        u16_t port)
+{
+    (void)arg; (void)pcb; (void)port;
+
+    if (p == NULL) {
+        return;
+    }
+
+    uint16_t len = p->tot_len;
+    uint8_t buffer[16] = {0};
+
+    if (len > (uint16_t)sizeof(buffer)) {
+        pbuf_free(p);
+        return;
+    }
+
+    pbuf_copy_partial(p, buffer, len, 0);
+    pbuf_free(p);   /* LwIP 메모리 즉시 해제 (필수!) */
+
+    if (addr == NULL || !IP_IS_V4(addr)) {
+        return;
+    }
+    uint8_t sender = ip4_addr4(ip_2_ip4(addr));
+
+    /* ── 5 bytes: ASMS mode + joystick ── */
+    if (len == ASMS_PACKET_SIZE && sender == ASMS_IP_LAST_OCTET) {
+        uint8_t mode = buffer[0];
+        int16_t joy_y = (int16_t)((buffer[4] << 8) | buffer[3]);
+
+        if (mode <= (uint8_t)STEER_MODE_ESTOP) {
+            g_current_mode = (SteerMode_t)mode;
+        }
+
+        if (g_current_mode == STEER_MODE_MANUAL) {
+            g_latest_pkt.steering_angle = joy_to_deg(joy_y);
+            g_new_data = true;
+        } else if (g_current_mode == STEER_MODE_ESTOP) {
+            g_emergency_request = true;
+        }
+        return;
+    }
+
+    /* ── 9 bytes: PC steer/speed/misc (AUTO mode only) ── */
+    if (len == PC_PACKET_SIZE && sender == PC_IP_LAST_OCTET) {
+        if (g_current_mode != STEER_MODE_AUTO) {
+            return;
+        }
+
+        int32_t pc_steer = (int32_t)(
+            ((uint32_t)buffer[0]) |
+            ((uint32_t)buffer[1] << 8) |
+            ((uint32_t)buffer[2] << 16) |
+            ((uint32_t)buffer[3] << 24));
+        uint8_t pc_misc = buffer[8];
+
+        if ((pc_misc >> 7) & 0x01U) {
+            g_emergency_request = true;
+            g_current_mode = STEER_MODE_ESTOP;
+            return;
+        }
+
+        g_latest_pkt.steering_angle = clamp_deg((float)pc_steer);
+        g_new_data = true;
+        return;
+    }
+}
+
+/**
+ * @brief UDP 수신 소켓 초기화 (MX_LWIP_Init() 이후 1회 호출)
+ */
+void EthComm_UDP_Init(void)
+{
+    g_udp_pcb = udp_new();
+    if (g_udp_pcb == NULL) {
+        printf("[EthComm] ERROR: udp_new() failed\r\n");
+        return;
+    }
+
+    err_t err = udp_bind(g_udp_pcb, IP_ADDR_ANY, AUTODRIVE_UDP_PORT);
+    if (err != ERR_OK) {
+        printf("[EthComm] ERROR: udp_bind() failed (%d)\r\n", (int)err);
+        udp_remove(g_udp_pcb);
+        g_udp_pcb = NULL;
+        return;
+    }
+
+    udp_recv(g_udp_pcb, udp_recv_cb, NULL);
+    printf("[EthComm] UDP ready  PORT:%d\r\n", AUTODRIVE_UDP_PORT);
+}
+
+/**
+ * @brief 새 패킷 수신 여부 확인
+ * @return true : 새 데이터 있음 → EthComm_GetLatestData() 로 읽을 것
+ */
+bool EthComm_HasNewData(void)
+{
+    return g_new_data;
+}
+
+/**
+ * @brief 가장 최근 수신 패킷 반환 (플래그 초기화)
+ */
+AutoDrive_Packet_t EthComm_GetLatestData(void)
+{
+    g_new_data = false;
+    return g_latest_pkt;
+}
+
+SteerMode_t EthComm_GetCurrentMode(void)
+{
+    return g_current_mode;
+}
+
+bool EthComm_ConsumeEmergencyRequest(void)
+{
+    bool req = g_emergency_request;
+    g_emergency_request = false;
+    return req;
 }

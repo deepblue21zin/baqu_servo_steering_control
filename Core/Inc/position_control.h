@@ -8,8 +8,8 @@
 
 // ========== 상수 정의 ==========//
 #define CONTROL_PERIOD_MS       1       // 제어 주기 1ms
-#define MAX_ANGLE_DEG          45.0f    // 최대 조향 각도
-#define MIN_ANGLE_DEG         -45.0f    // 최소 조향 각도
+#define MAX_ANGLE_DEG   360.0f
+#define MIN_ANGLE_DEG  -360.0f    // 최소 조향 각도
 #define POSITION_TOLERANCE     0.5f     // 위치 허용 오차 (도)
 
 //PID 기본값

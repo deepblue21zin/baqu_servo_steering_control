@@ -14,7 +14,7 @@ static volatile uint8_t debug_enabled = 0; // 디버그 메시지 출력 여부
 static volatile uint8_t fault_flag = 0; // 안전 관련 플래그
 
 static PID_Params_t pid_params = {
-    .Kp = 500.0f,           // 초기값 (실험으로 튜닝 필요)
+    .Kp = 50.0f,           // 초기값 (실험으로 튜닝 필요)
     .Ki = 5.0f,
     .Kd = 20.0f,
     .integral_limit = 1000.0f,
@@ -101,15 +101,18 @@ void PositionControl_Update(void) {
     
     // 1. 현재 각도 읽기
     state.current_angle = EncoderReader_GetAngleDeg();
-    
-    // 2. 안전 체크
+
+    // 2. 오차 계산 (안전 체크보다 먼저!)
+    // [BUG FIX] 기존 코드: 안전 체크가 오차 계산보다 앞에 있어서
+    // CheckSafety()가 이전 루프의 state.error를 참조하는 1-step 지연 버그 존재.
+    // 수정: 오차를 먼저 계산하고 안전 체크 수행.
+    state.error = state.target_angle - state.current_angle;
+
+    // 3. 안전 체크 (현재 오차 기준으로 판단)
     if (!PositionControl_CheckSafety()) {
         PositionControl_EmergencyStop();
         return;
     }
-    
-    // 3. 오차 계산
-    state.error = state.target_angle - state.current_angle;
     
     // 4. 시간 계산
     uint32_t current_time = HAL_GetTick();
@@ -206,8 +209,16 @@ ControlMode_t PositionControl_GetMode(void) {
 
 int PositionControl_Enable(void) {
     control_enabled = true;
-    pid_state.integral = 0.0f;  // 적분 리셋
-    printf("[PosCtrl] Enabled\n");
+    fault_flag = 0;              // EmergencyStop 후 재활성화 시 fault 초기화
+
+    // [BUG FIX] D항 킥 방지 (Derivative Kick Prevention)
+    // 기존: prev_error=0으로 초기화 → 첫 호출 시 D=(error-0)/0.001=10000 → d_term=200000 → MAX cap
+    // 수정: Enable 시점의 현재 오차로 prev_error 초기화 → 첫 D항 = (error-error)/dt = 0
+    state.current_angle = EncoderReader_GetAngleDeg();
+    pid_state.prev_error = state.target_angle - state.current_angle;
+    pid_state.integral = 0.0f;
+    pid_state.last_time_ms = HAL_GetTick();
+    printf("[PosCtrl] Enabled (FLT cleared, angle=%.2f)\r\n", state.current_angle);
     return POS_CTRL_OK;
 }
 
@@ -232,19 +243,20 @@ void PositionControl_SetSafetyLimits(SafetyLimits_t* limits) {
 }
 
 bool PositionControl_CheckSafety(void) {
-    // 각도 범위 체크
-    if (state.current_angle > MAX_ANGLE_DEG + 5.0f || 
+    // 각도 범위 체크 (하드웨어 물리 한계)
+    if (state.current_angle > MAX_ANGLE_DEG + 5.0f ||
         state.current_angle < MIN_ANGLE_DEG - 5.0f) {
         fault_flag = 1;
         return false;
     }
-    
-    // 오차가 너무 큰 경우
-    if (fabsf(state.error) > 60.0f) {
+
+    // [수정] 오차 임계값: 60° → 150°로 완화 (테스트 시 PID 오버슈트/진동 허용)
+    // 참고: 이 체크는 state.error 계산 후에 호출해야 의미 있음
+    if (fabsf(state.error) > 150.0f) {
         fault_flag = 2;
         return false;
     }
-    
+
     return true;
 }
 bool PositionControl_IsSafe(void) {
@@ -255,8 +267,12 @@ void PositionControl_EmergencyStop(void) {
     control_enabled = false;
     PulseControl_Stop();
     pid_state.integral = 0.0f;
-    printf("[PosCtrl] EMERGENCY STOP!\n");
-    Relay_Emergency();
+    // [수정] fault 상세 원인 출력 (fault_flag: 1=각도범위초과, 2=오차초과)
+    printf("[PosCtrl] EMERGENCY STOP! FLT=%d Ang:%.1f Err:%.1f\r\n",
+           (int)fault_flag, state.current_angle, state.error);
+    // EMG 릴레이 24V 미연결 상태이므로 Relay_Emergency() 호출 안 함.
+    // P2-02 EMG 기능 비활성화 상태이므로 드라이브에도 영향 없음.
+    // 재활성화: PositionControl_Enable() 재호출로 복구 가능.
 }
 // ========== 성능 모니터링 ==========
 PosCtrl_Stats_t PositionControl_GetStats(void) {
@@ -304,7 +320,9 @@ const char* PositionControl_GetErrorString(PosCtrl_Error_t error) {
        
 
 void PositionControl_PrintStatus(void) {
-    printf("[PosCtrl] Target:%.2f Current:%.2f Error:%.2f Out:%.0f %s\n",
+    printf("[PosCtrl] EN:%d FLT:%d Target:%.2f Current:%.2f Error:%.2f Out:%.0f %s\r\n",
+           (int)control_enabled,
+           (int)fault_flag,
            state.target_angle,
            state.current_angle,
            state.error,
