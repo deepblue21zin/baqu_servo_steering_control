@@ -6,6 +6,7 @@
 #include <stdint.h>              // uint32_t, int32_t
 #include <math.h>                // fabsf
 #include "main.h"
+#include "latency_profiler.h"
 
 //의존성
 
@@ -55,7 +56,9 @@ int PositionControl_Init(void) {
     control_mode = CTRL_MODE_IDLE;
     state.mode = CTRL_MODE_IDLE;
 
+#if LATENCY_LOG_ENABLE
     printf("[PosCtrl] Initialized\n");
+#endif
     return POS_CTRL_OK;  // 성공
 }
 
@@ -101,7 +104,8 @@ void PositionControl_Update(void) {
         PulseControl_Stop();
         return;
     }
-    
+
+    LAT_BEGIN(LAT_STAGE_SENSE);
     // 1. 현재 각도 읽기
     state.current_angle = EncoderReader_GetAngleDeg();
 
@@ -110,9 +114,12 @@ void PositionControl_Update(void) {
     // CheckSafety()가 이전 루프의 state.error를 참조하는 1-step 지연 버그 존재.
     // 수정: 오차를 먼저 계산하고 안전 체크 수행.
     state.error = state.target_angle - state.current_angle;
+    LAT_END(LAT_STAGE_SENSE);
 
     // 3. 안전 체크 (현재 오차 기준으로 판단)
+    LAT_BEGIN(LAT_STAGE_CONTROL);
     if (!PositionControl_CheckSafety()) {
+        LAT_END(LAT_STAGE_CONTROL);
         PositionControl_EmergencyStop();
         return;
     }
@@ -132,9 +139,12 @@ void PositionControl_Update(void) {
     
     // 5. PID 계산
     state.output = PID_Calculate(state.error, dt);
+    LAT_END(LAT_STAGE_CONTROL);
     
     // 6. 펄스 출력
+    LAT_BEGIN(LAT_STAGE_ACTUATE);
     PulseControl_SetFrequency((int32_t)state.output);
+    LAT_END(LAT_STAGE_ACTUATE);
     
     // 7. 안정화 판단
     if (fabsf(state.error) < POSITION_TOLERANCE) {
@@ -197,8 +207,10 @@ void PositionControl_SetPID(float Kp, float Ki, float Kd) {
     // 적분 리셋
     pid_state.integral = 0.0f;
     
-    printf("[PosCtrl] PID updated: Kp=%.2f, Ki=%.2f, Kd=%.2f\n", 
+#if LATENCY_LOG_ENABLE
+    printf("[PosCtrl] PID updated: Kp=%.2f, Ki=%.2f, Kd=%.2f\n",
            Kp, Ki, Kd);
+#endif
 }
 
 // ========== 제어 모드 ==========
@@ -224,7 +236,9 @@ int PositionControl_Enable(void) {
     pid_state.prev_error = state.target_angle - state.current_angle;
     pid_state.integral = 0.0f;
     pid_state.last_time_ms = HAL_GetTick();
+#if LATENCY_LOG_ENABLE
     printf("[PosCtrl] Enabled (FLT cleared, angle=%.2f)\r\n", state.current_angle);
+#endif
     return POS_CTRL_OK;
 }
 
@@ -236,14 +250,18 @@ void PositionControl_Disable(void) {
     control_mode = CTRL_MODE_IDLE;
     state.mode = CTRL_MODE_IDLE;
     PulseControl_Stop();
-    printf("[PosCtrl] Disabled\r\n");
+#if LATENCY_LOG_ENABLE
+    printf("[PosCtrl] Disabled\n");
+#endif
 }
 
 void PositionControl_Reset(void) {
     pid_state.integral = 0.0f;
     pid_state.prev_error = 0.0f;
     state.target_angle = 0.0f;
-    printf("[PosCtrl] Reset\r\n");
+#if LATENCY_LOG_ENABLE
+    printf("[PosCtrl] Reset\n");
+#endif
 }
 
 // ========== 안전 기능 ==========
@@ -261,9 +279,9 @@ bool PositionControl_CheckSafety(void) {
         return false;
     }
 
-    // [수정] 오차 임계값: 60° → 150°로 완화 (테스트 시 PID 오버슈트/진동 허용)
+    // 다회전 운용(기어비 적용) 기준 추종 오차 한계
     // 참고: 이 체크는 state.error 계산 후에 호출해야 의미 있음
-    if (fabsf(state.error) > 150.0f) {
+    if (fabsf(state.error) > MAX_TRACKING_ERROR_DEG) {
         fault_flag = 2;
         return false;
     }
@@ -282,8 +300,13 @@ void PositionControl_EmergencyStop(void) {
     pid_state.integral = 0.0f;
     Relay_Emergency();
     // [수정] fault 상세 원인 출력 (fault_flag: 1=각도범위초과, 2=오차초과)
+#if LATENCY_LOG_ENABLE
     printf("[PosCtrl] EMERGENCY STOP! FLT=%d Ang:%.1f Err:%.1f\r\n",
            (int)fault_flag, state.current_angle, state.error);
+#endif
+    // 현재는 소프트 정지 + EMG 릴레이 정지를 함께 수행.
+    // 재활성화 시에는 상위 모드 전이에서 Relay_EmergencyRelease() 이후
+    // PositionControl_Enable()이 호출되어 제어를 재개한다.
 }
 // ========== 성능 모니터링 ==========
 PosCtrl_Stats_t PositionControl_GetStats(void) {

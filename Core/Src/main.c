@@ -34,6 +34,7 @@
 #include "ethernet_communication.h"
 #include "homing.h"
 #include "adc_potentiometer.h"
+#include "latency_profiler.h"
 #include <string.h>
 #include <stdio.h>
 /* USER CODE END Includes */
@@ -65,11 +66,61 @@ extern volatile uint8_t interrupt_flag;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
+static void Latency_TryAutoReport(void);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static uint32_t g_latency_report_seq = 0U;
+
+static void Latency_TryAutoReport(void)
+{
+#if LATENCY_AUTO_REPORT_ENABLE
+    static uint32_t check_div = 0U;
+    uint32_t i = 0U;
+    uint32_t miss_count = 0U;
+    LatencyStageStats_t stats = {0};
+
+    if (++check_div < 10U) {
+        return;
+    }
+    check_div = 0U;
+
+    for (i = 0U; i < (uint32_t)LAT_STAGE_COUNT; i++) {
+        if (LatencyProfiler_GetStageSampleCount((LatencyStage_t)i) < LATENCY_AUTO_REPORT_SAMPLES) {
+            return;
+        }
+    }
+
+    miss_count = LatencyProfiler_GetDeadlineMissCount();
+    printf("LATENCY_BATCH_BEGIN,seq=%lu,samples=%u,core_hz=%lu,deadline_miss=%lu\r\n",
+           (unsigned long)g_latency_report_seq,
+           (unsigned int)LATENCY_AUTO_REPORT_SAMPLES,
+           (unsigned long)SystemCoreClock,
+           (unsigned long)miss_count);
+
+    for (i = 0U; i < (uint32_t)LAT_STAGE_COUNT; i++) {
+        if (LatencyProfiler_GetStageStats((LatencyStage_t)i, &stats)) {
+            printf("LATENCY_STAGE,seq=%lu,name=%s,count=%lu,avg_cycles=%lu,p99_cycles=%lu,max_cycles=%lu,avg_us=%.3f,p99_us=%.3f,max_us=%.3f\r\n",
+                   (unsigned long)g_latency_report_seq,
+                   LatencyProfiler_StageName((LatencyStage_t)i),
+                   (unsigned long)stats.sample_count,
+                   (unsigned long)stats.avg_cycles,
+                   (unsigned long)stats.p99_cycles,
+                   (unsigned long)stats.max_cycles,
+                   stats.avg_us,
+                   stats.p99_us,
+                   stats.max_us);
+        }
+    }
+
+    printf("LATENCY_BATCH_END,seq=%lu\r\n", (unsigned long)g_latency_report_seq);
+
+    g_latency_report_seq++;
+    LatencyProfiler_Reset();
+#endif
+}
 
 /* USER CODE END 0 */
 
@@ -95,6 +146,7 @@ int main(void)
 
   /* Configure the system clock */
   SystemClock_Config();
+  LatencyProfiler_Init(SystemCoreClock);
 
   /* USER CODE BEGIN SysInit */
 
@@ -131,9 +183,8 @@ int main(void)
   // ServoOn 직후 모터가 무제어 역방향 고속 회전하는 문제가 있었음.
   // PWM은 PulseControl_SetFrequency() 내부에서 방향/속도 설정 후 시작됨.
 
-  // 사용자가 외부에서 항상 SVON ON 상태이므로 코드에서도 ServoOn 호출.
-  // EMG 릴레이는 24V 미연결이므로 Relay_Init()의 GPIO HIGH 설정만 적용됨.
-  // P2-02 EMG 기능 비활성화 상태이므로 드라이브는 EMG DI 무시.
+  // 초기 구동 시 서보를 ON 상태로 올린다.
+  // EMG 동작은 런타임 fail-safe / EmergencyStop 경로에서 처리된다.
   Relay_ServoOn();
   HAL_Delay(500); // 서보 ON 안정화 대기
 
@@ -165,6 +216,7 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     /* ── LwIP 폴링: 이더넷 패킷 수신 처리 ── */
+    LAT_BEGIN(LAT_STAGE_COMMS);
     MX_LWIP_Process();
 
     SteerMode_t mode = EthComm_GetCurrentMode();
@@ -203,9 +255,10 @@ int main(void)
     if (EthComm_HasNewData()) {
         AutoDrive_Packet_t pkt = EthComm_GetLatestData();
         if (mode == STEER_MODE_AUTO || mode == STEER_MODE_MANUAL) {
-            PositionControl_SetTarget(pkt.steering_angle);  // degree 기준
+            PositionControl_SetTarget(pkt.steering_angle);
         }
     }
+    LAT_END(LAT_STAGE_COMMS);
     prev_mode = mode;
 
     /* ── 1ms 제어 루프 ── */
@@ -228,8 +281,8 @@ int main(void)
             GPIO_PinState dir_state = HAL_GPIO_ReadPin(DIR_PIN_GPIO_Port, DIR_PIN_Pin);
             PositionControl_State_t s = PositionControl_GetState();
             debug_cnt = 0;
-            printf("[DIAG] COMM_MODE:%d CTRL_MODE:%d T:%.2f C:%.2f E:%.2f O:%.0f ARR:%lu CCR:%lu DIR:%d ENC:%lu\r\n",
-                   (int)mode,
+#if LATENCY_LOG_ENABLE
+            printf("[DIAG] MODE:%d T:%.2f C:%.2f E:%.2f O:%.0f ARR:%lu CCR:%lu DIR:%d ENC:%lu\r\n",
                    (int)PositionControl_GetMode(),
                    s.target_angle,
                    s.current_angle,
@@ -239,9 +292,17 @@ int main(void)
                    (unsigned long)ccr,
                    (int)dir_state,
                    (unsigned long)enc_raw);
+#else
+            (void)arr;
+            (void)ccr;
+            (void)enc_raw;
+            (void)dir_state;
+            (void)s;
+#endif
         }
     }
 
+    Latency_TryAutoReport();
     HAL_IWDG_Refresh(&hiwdg);
   }
   /* USER CODE END 3 */
