@@ -8,6 +8,12 @@
 #define AUTODRIVE_UDP_PORT    5000
 #define ETHCOMM_RX_TIMEOUT_MS 300U
 
+/* 로그 정책:
+ * 0: quiet(권장), 1: info/error 로그 출력 */
+#ifndef ETHCOMM_LOG_ENABLE
+#define ETHCOMM_LOG_ENABLE 0
+#endif
+
 /* 내부 정규화 데이터:
  * - ASMS 5B(mode + joystick), PC 9B(<iIB>)를 파싱해 공통 포맷으로 저장 */
 typedef struct {
@@ -53,11 +59,12 @@ typedef enum {
     STEER_MODE_ESTOP = 3
 } SteerMode_t;
 
+/* Legacy text-command API:
+ * 현재 런타임 경로는 UDP API를 사용한다.
+ * 아래 API는 벤치/디버깅 용도로만 유지한다. */
 int EthComm_Init(const EthComm_Config_t *config);
 void EthComm_Update(void);
 bool EthComm_IsInitialized(void);
-
-/* 테스트/디버깅용 API */
 int EthComm_SendString(const char *msg);
 int EthComm_HandleLine(const char *line);
 

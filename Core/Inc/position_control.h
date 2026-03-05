@@ -8,8 +8,11 @@
 
 // ========== 상수 정의 ==========//
 #define CONTROL_PERIOD_MS       1       // 제어 주기 1ms
-#define MAX_ANGLE_DEG   360.0f
-#define MIN_ANGLE_DEG  -360.0f    // 최소 조향 각도
+/* 12:1 기어비 기준: 모터 12회전 = 조향축 1회전(360deg)
+ * => 모터 각도 기준 운용 한계: +/-4320deg */
+#define MAX_ANGLE_DEG   4320.0f
+#define MIN_ANGLE_DEG  -4320.0f
+#define MAX_TRACKING_ERROR_DEG 4500.0f
 #define POSITION_TOLERANCE     0.5f     // 위치 허용 오차 (도)
 
 //PID 기본값

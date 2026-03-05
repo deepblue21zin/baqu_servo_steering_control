@@ -1,13 +1,13 @@
 /*
  * ethernet_communication.c
  *
- * 구조만 잡아둔 템플릿:
- * - 초기화
- * - 주기 업데이트
- * - 라인 파싱
- * - 명령 디스패치
+ * 현재 런타임 경로:
+ * - UDP 수신(ASMS 5B, PC 9B) 파싱
+ * - 공통 패킷/모드 저장
+ * - main 루프가 모드/목표/ESTOP 적용
  *
- * TODO 표시된 부분을 직접 구현해서 채우면 됩니다.
+ * Legacy text-command API(EthComm_Init/Update/HandleLine)는
+ * 벤치/디버깅 호환 목적으로 유지한다.
  */
 
 #include "ethernet_communication.h"
@@ -23,6 +23,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+#define ETHCOMM_LOG(fmt, ...) \
+    do { if (ETHCOMM_LOG_ENABLE) { printf(fmt, ##__VA_ARGS__); } } while (0)
 
 /* ========== Private Types ========== */
 
@@ -62,7 +65,7 @@ int EthComm_Init(const EthComm_Config_t *config)
     g_eth.cfg = *config;
     g_eth.initialized = true;
 
-    /* TODO: Ethernet PHY/Socket/UART 브리지 초기화 코드를 여기에 추가 */
+    /* Legacy API 전용: 현재 런타임 경로에서는 사용하지 않음. */
 
     return ETH_COMM_OK;
 }
@@ -75,12 +78,7 @@ void EthComm_Update(void)
         return;
     }
 
-    /*
-     * TODO:
-     * - non-blocking 방식으로 수신 바이트를 반복 읽기
-     * - 데이터가 있으면 EthComm_ProcessRxByte 호출
-     * - 아래 while 조건부는 실제 드라이버에 맞게 교체
-     */
+    /* Legacy API 전용 non-blocking 폴링 루프 */
     while (EthComm_ReadRxByte(&byte) == ETH_COMM_OK) {
         (void)EthComm_ProcessRxByte(byte);
     }
@@ -107,8 +105,7 @@ int EthComm_SendString(const char *msg)
     memcpy(g_eth.cfg.tx_buffer, msg, len);
     g_eth.cfg.tx_buffer[len] = '\0';
 
-    /* TODO: 실제 전송 함수로 교체 (LAN8742/LwIP, Wiznet, UART 등) */
-    /* 예: HAL_UART_Transmit(...), netconn_write(...), send(...) */
+    /* Legacy API: 실제 송신 경로 미연결 (벤치/디버깅 용도). */
 
     return ETH_COMM_OK;
 }
@@ -145,12 +142,7 @@ static int EthComm_ReadRxByte(uint8_t *out_byte)
         return ETH_COMM_ERR_BAD_PARAM;
     }
 
-    /*
-     * TODO:
-     * - 수신 데이터가 있으면 *out_byte에 1바이트 저장 후 ETH_COMM_OK 반환
-     * - 데이터가 없으면 ETH_COMM_ERR_RX_FAIL 또는 별도 코드 반환
-     * - 블로킹 금지(주기 루프 성능 유지)
-     */
+    /* Legacy API: 실제 드라이버 미연결 상태이므로 no-data 반환 */
     (void)out_byte;
     return ETH_COMM_ERR_RX_FAIL;
 }
@@ -289,7 +281,7 @@ static int EthComm_SendStatus(void)
         return ETH_COMM_ERR_TX_FAIL;
     }
 
-    /* TODO: 실제 네트워크 전송 함수로 교체 */
+    /* Legacy API: 네트워크 직접 송신 경로 미사용 */
     return EthComm_SendString((char *)g_eth.cfg.tx_buffer);
 }
 
@@ -312,8 +304,8 @@ static volatile uint32_t    g_last_rx_tick = 0U;
 
 static float clamp_deg(float v)
 {
-    if (v > 360.0f) return 360.0f;
-    if (v < -360.0f) return -360.0f;
+    if (v > MAX_ANGLE_DEG) return MAX_ANGLE_DEG;
+    if (v < MIN_ANGLE_DEG) return MIN_ANGLE_DEG;
     return v;
 }
 
@@ -441,20 +433,20 @@ void EthComm_UDP_Init(void)
 {
     g_udp_pcb = udp_new();
     if (g_udp_pcb == NULL) {
-        printf("[EthComm] ERROR: udp_new() failed\r\n");
+        ETHCOMM_LOG("[EthComm] ERROR: udp_new() failed\r\n");
         return;
     }
 
     err_t err = udp_bind(g_udp_pcb, IP_ADDR_ANY, AUTODRIVE_UDP_PORT);
     if (err != ERR_OK) {
-        printf("[EthComm] ERROR: udp_bind() failed (%d)\r\n", (int)err);
+        ETHCOMM_LOG("[EthComm] ERROR: udp_bind() failed (%d)\r\n", (int)err);
         udp_remove(g_udp_pcb);
         g_udp_pcb = NULL;
         return;
     }
 
     udp_recv(g_udp_pcb, udp_recv_cb, NULL);
-    printf("[EthComm] UDP ready  PORT:%d\r\n", AUTODRIVE_UDP_PORT);
+    ETHCOMM_LOG("[EthComm] UDP ready  PORT:%d\r\n", AUTODRIVE_UDP_PORT);
 }
 
 /**
