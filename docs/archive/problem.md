@@ -24,9 +24,15 @@
 | **BUG-012** | **debug_cnt 타이밍 오류** | **main.c** | **Major** | **해결 (2026-02-21)** |
 | **BUG-013** | **USER CODE 블록 위치 오류** | **main.c** | **Major** | **해결 (2026-02-21)** |
 | **BUG-014** | **MX_LWIP_Init() IWDG 충돌 위험** | **main.c** | **Major** | **해결 (2026-02-21, 주석처리)** |
-| **NEW-001** | **이더넷 통신 LwIP UDP 미구현** | **ethernet_communication.c** | **Major** | **미해결 (Phase 2)** |
-| **NEW-002** | **통신 워치독 미구현** | **미정** | **Major** | **미해결 (Phase 2)** |
-| **NEW-003** | **시스템 상태 머신 미구현** | **미정** | **Major** | **미해결 (Phase 3)** |
+| **BUG-015** | **DIR 핀 매핑 불일치 (PE10 vs PE11)** | **main.h, main.c, pulse_control.c** | **Critical** | **해결 (2026-02-24)** |
+| **BUG-016** | **테스트 모드 잔류로 운영 루프 비활성화 위험** | **main.c** | **Major** | **해결 (2026-02-24)** |
+| **BUG-017** | **UDP 포트/조향 범위 명세 불일치** | **ethernet_communication.c/h** | **Major** | **해결 (2026-02-24)** |
+| **BUG-018** | **기동 초기 목표각/주석 불일치 + NONE 모드 미처리** | **main.c** | **Major** | **해결 (2026-02-24)** |
+| **BUG-019** | **통신 파서 명세 불일치 (17B vs 5/9B)** | **ethernet_communication.c/h** | **Critical** | **해결 (2026-02-24)** |
+| **BUG-020** | **통신 끊김 fail-safe 미흡 (RX timeout 미구현)** | **main.c, ethernet_communication.c/h** | **Critical** | **해결 (2026-02-24)** |
+| **BUG-021** | **CTRL_MODE 진단값 고정 반환** | **position_control.c** | **Major** | **해결 (2026-02-24)** |
+| **BUG-022** | **EMG 하드웨어 정지 경로 비활성** | **position_control.c** | **Critical** | **해결 (2026-02-24)** |
+| **NEW-003** | **시스템 상태 머신 미구현(완전형)** | **미정** | **Major** | **미해결 (Phase 3)** |
 | **NEW-004** | **상수 중복 정의** | **constants.h, position_control.h** | **Minor** | **미해결** |
 
 ---
@@ -253,27 +259,128 @@ CubeMX 코드 재생성 시 이 영역이 **자동 삭제**되어 PID 루프, IW
 
 ## 미해결 이슈
 
-### NEW-001: 이더넷 통신 LwIP UDP 미구현
+## BUG-015: DIR 핀 매핑 불일치 (PE10 vs PE11)
+
+**심각도:** Critical  
+**상태:** **해결 완료 (2026-02-24)**  
+**파일:** `Core/Inc/main.h`, `Core/Src/main.c`, `Core/Src/pulse_control.c`
+
+### 문제
+
+- `.ioc`는 DIR가 PE10으로 설정되어 있었으나, 코드/주석 일부가 PE11 기준으로 남아 혼선 발생
+
+### 해결
+
+- `DIR_PIN_Pin`을 PE10으로 정합화
+- `main.c` GPIO 재설정 핀도 PE10으로 수정
+- `pulse_control.c` 주석 정합화
+
+---
+
+## BUG-016: 테스트 모드 잔류로 운영 루프 비활성화 위험
+
+**심각도:** Major  
+**상태:** **해결 완료 (2026-02-24)**  
+**파일:** `Core/Src/main.c`
+
+### 문제
+
+- 라인드라이버 검증을 위해 적용한 테스트 코드(고정/스윕 펄스)가 남으면 UDP+PID 운영 루프가 동작하지 않음
+
+### 해결
+
+- 검증 후 `MX_LWIP_Process()` + `EthComm_HasNewData()` + `PositionControl_Update()` 운영 루프로 복구
+
+---
+
+## BUG-017: UDP 포트/조향 범위 명세 불일치
+
+**심각도:** Major  
+**상태:** **해결 완료 (2026-02-24)**  
+**파일:** `Core/Inc/ethernet_communication.h`, `Core/Src/ethernet_communication.c`
+
+### 문제
+
+- 수신 포트가 7000으로 되어 있어 레거시 송신기(5000)와 불일치
+- 조향 유효 범위/스케일 정책이 코드와 명세 간 불일치
+
+### 해결
+
+- `AUTODRIVE_UDP_PORT`를 5000으로 변경
+- `steering_angle` 유효 범위/매핑 정책을 운영 기준에 맞춰 조정
+
+---
+
+## BUG-018: 기동 초기 목표각/주석 불일치 + NONE 모드 미처리
+
+**심각도:** Major  
+**상태:** **해결 완료 (2026-02-24)**  
+**파일:** `Core/Src/main.c`
+
+### 문제
+
+- 초기 목표각이 10.0f인데 주석은 0°로 표기되어 혼선 발생
+- `STEER_MODE_NONE`에서 제어 비활성화가 없어 마지막 목표를 계속 추종할 가능성
+
+### 해결
+
+- 초기 목표각 `10.0f → 0.0f`로 수정
+- `mode == STEER_MODE_NONE` 분기에서 `PositionControl_Disable()` 수행
+
+---
+
+## BUG-019: 통신 파서 명세 불일치 (17B vs 5/9B)
+
+**심각도:** Critical  
+**상태:** **해결 완료 (2026-02-24)**  
+**파일:** `Core/Inc/ethernet_communication.h`, `Core/Src/ethernet_communication.c`
+
+### 문제
+
+- 기존 구현은 `AutoDrive_Packet_t(17 bytes)` 중심
+- 실제 운영 명세는 ASMS 5 bytes / PC 9 bytes + sender IP 구분
+
+### 해결
+
+- UDP 콜백을 길이+발신자 IP 기반 파싱으로 전환
+  - ASMS(5B, .5): mode/joy 처리
+  - PC(9B, .1): AUTO 모드 steer 처리, misc bit7 ESTOP 처리
+- 모드 API 추가(`EthComm_GetCurrentMode`, `EthComm_ConsumeEmergencyRequest`)
+
+---
+
+### BUG-020: 통신 끊김 fail-safe 미흡 (RX timeout 미구현)
+
+**심각도:** Critical
+**상태:** 해결 완료 (2026-02-24)
+
+- 문제: AUTO/MANUAL 운용 중 통신이 끊겨도 상태 유지 가능성 존재
+- 해결:
+  - `ETHCOMM_RX_TIMEOUT_MS` 추가(현재 300ms)
+  - `last_rx_tick` 기반으로 main 루프에서 timeout 감지 시 `ESTOP` 강제 전이
+- 결과: 통신 단절 시 소프트웨어가 안전 상태로 수렴
+
+### BUG-021: CTRL_MODE 진단값 고정 반환
 
 **심각도:** Major
-**상태:** 미해결 (Phase 2 예정)
-**파일:** `Core/Src/ethernet_communication.c`
+**상태:** 해결 완료 (2026-02-24)
 
-- CubeMX에서 ETH + LwIP 설정 완료 (UDP Enabled, Static IP 192.168.1.100)
-- `ethernet_communication.c`는 text-based stub 상태
-- `MX_LWIP_Process()`가 main while 루프에 미추가
-- LwIP UDP API (`udp_new`, `udp_bind`, `udp_recv`, `udp_sendto`)로 재구현 필요
+- 문제: `PositionControl_GetMode()`가 `CTRL_MODE_POSITION` 고정 반환
+- 해결: 내부 `control_mode` 상태 변수 도입 후 Enable/Disable/Emergency/SetMode에서 갱신
+- 결과: DIAG의 `CTRL_MODE`가 실제 제어 상태를 반영
 
-### NEW-002: 통신 워치독 미구현
+### BUG-022: EMG 하드웨어 정지 경로 비활성
 
-**심각도:** Major
-**상태:** 미해결 (Phase 2 예정)
+**심각도:** Critical
+**상태:** 해결 완료 (2026-02-24)
 
-- 상위 제어기(Jetson/PC)와의 통신 두절 시 안전 대응 없음
-- 일정 시간(예: 500ms) 명령 미수신 → 자동 비상정지 필요
-- ADAS 조향 시스템에서 **필수** 안전 기능 (통신 실패 = 제어 불능)
+- 문제: `EmergencyStop()`에서 EMG 릴레이 호출이 비활성 주석 상태
+- 해결:
+  - `PositionControl_EmergencyStop()`에서 `Relay_Emergency()` 호출
+  - Enable 복귀 시 `Relay_EmergencyRelease()` 호출
+- 결과: 소프트 정지 + 하드 EMG 정지 동시 보장
 
-### NEW-003: 시스템 상태 머신 미구현
+### NEW-003: 시스템 상태 머신 미구현(완전형)
 
 **심각도:** Major
 **상태:** 미해결 (Phase 3 예정)
@@ -304,4 +411,4 @@ CubeMX 코드 재생성 시 이 영역이 **자동 삭제**되어 PID 루프, IW
 
 ---
 
-*마지막 업데이트: 2026-02-21*
+*마지막 업데이트: 2026-02-24*
