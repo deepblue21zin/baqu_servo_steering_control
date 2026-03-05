@@ -48,6 +48,40 @@ STM32F429ZI 기반 조향 서브 컨트롤러 프로젝트.
 - Debug UART: USART3
 - Ethernet: RMII + LAN8742
 
+### 3.1 시스템 아키텍처 (요약)
+
+```text
+Upper Controller (PC/Jetson)
+        |
+        | UDP (RMII/LwIP)
+        v
+STM32F429ZI main loop
+  - Comms: packet parse / mode handling
+  - 1ms Control: PositionControl_Update()
+        |
+        +--> Pulse/Dir output --> Servo Driver --> Motor + Gear (12:1)
+        |
+        +--> Relay (SVON/EMG)
+        |
+        +--> Encoder feedback (TIM4) --> PID
+```
+
+### 3.2 핀 매핑 (요약)
+
+| Function | MCU Pin | Peripheral/IO | Note |
+|---|---|---|---|
+| Pulse Output | PE9 | TIM1_CH1 | Servo pulse |
+| Direction Output | PE10 | GPIO Output | CW/CCW direction |
+| Encoder A | PD12 | TIM4_CH1 | Quadrature input |
+| Encoder B | PD13 | TIM4_CH2 | Quadrature input |
+| SVON Relay | PD14 | GPIO Output | Active LOW |
+| EMG Relay | PD15 | GPIO Output | Active LOW |
+| Debug UART TX | PD8 | USART3_TX | 115200 |
+| Debug UART RX | PD9 | USART3_RX | 115200 |
+| Ethernet | RMII pins | ETH + LAN8742 | UDP comm |
+
+상세 핀맵/주의사항은 [hardware_pinmap.md](/Users/deepblue/baqu_servo_steering_control/docs/hardware_pinmap.md) 참고.
+
 ## 4. 실시간/성능 검증 체계
 
 이 프로젝트의 차별점은 “동작한다”가 아니라 “수치로 재현 가능”하게 관리하는 점이다.
