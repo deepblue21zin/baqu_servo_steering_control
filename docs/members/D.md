@@ -289,3 +289,151 @@ D 파트는 아래 자료가 있으면 바로 포트폴리오 힘이 생긴다.
 가장 추천하는 포트폴리오 문장:
 
 > PID 출력값을 servo driver가 바로 사용할 수 있는 pulse/direction 신호로 변환하고, 주파수 계산식, 정지 경로, 방향 전환 정책을 하드웨어 파형 기준으로 검증해 actuator interface의 신뢰성을 높였다.
+
+## 10. 지금부터 팀원 D에게 할당할 상세 개발 REQ
+
+이 섹션은 D 파트를 "PWM을 내는 코드"가 아니라, servo drive가 신뢰할 수 있는 pulse/direction 인터페이스를 보장하는 책임으로 다시 쪼갠 실행형 요구사항이다. 현재 가장 급한 것은 direction polarity와 stop / reverse 정책을 닫는 것이다.
+
+### `REQ-D-017`: direction polarity를 코드에서 독립적으로 제어 가능해야 한다.
+- 목적:
+  - 실제 기구 방향과 `DIR=0/1`의 대응이 바뀌더라도 제어기 전체를 건드리지 않고 수정할 수 있게 만든다.
+- 구현 범위:
+  - `DIR_ACTIVE_HIGH_FOR_CW` 같은 polarity 매크로 또는 설정값을 둔다.
+  - `PulseControl_ApplyDirection()`이 이 설정을 통해 최종 GPIO level을 계산하게 만든다.
+  - 문서에는 물리 기준 방향과 GPIO level 대응을 명확히 남긴다.
+- 완료 기준:
+  - polarity를 바꿔도 상위 제어 코드 수정 없이 물리 방향이 뒤집힌다.
+  - `+1deg`, `-1deg`에서 예상 방향으로 동작한다.
+- 검증 방법:
+  - `PE10` 캡처
+  - 실제 모터 방향 기록
+- 산출물:
+  - dir polarity mapping 표
+  - before/after 캡처
+
+### `REQ-D-018`: timer clock과 ARR/CCR 계산은 실제 설정값 기준으로 계산되어야 한다.
+- 목적:
+  - 지금처럼 `180MHz` 하드코딩에 의존하면 clock tree 변경 시 출력이 틀어질 수 있다.
+- 구현 범위:
+  - TIM1 actual input clock 계산 로직을 넣는다.
+  - prescaler, ARR, CCR, target freq 관계를 코드와 문서에 남긴다.
+  - low / mid / high frequency 3구간에서 오차를 측정한다.
+- 완료 기준:
+  - `requested_hz`와 `applied_hz` 오차를 설명 가능하다.
+  - clock tree 변경 후에도 계산식이 유지된다.
+- 검증 방법:
+  - scope frequency measurement
+- 산출물:
+  - calculation note
+  - freq accuracy CSV
+
+### `REQ-D-019`: reverse 시에는 stop-before-reverse와 guard time 정책이 있어야 한다.
+- 목적:
+  - 방향 전환 순간 residual pulse나 driver glitch로 인한 충격을 막는다.
+- 구현 범위:
+  - 방향이 바뀌는 경우 `stop -> guard time -> dir change -> guard time -> pulse restart` 정책을 정의한다.
+  - guard time은 servo drive datasheet 또는 실측 근거로 정한다.
+- 완료 기준:
+  - reverse 100회 반복에서 glitch 0건을 목표로 한다.
+  - reverse 순간 불필요한 pulse burst가 없다.
+- 검증 방법:
+  - `PE9`, `PE10` 동시 logic analyzer 캡처
+- 산출물:
+  - reverse timing contract
+  - glitch count 기록
+
+### `REQ-D-020`: disable / estop / not-ready 상태에서는 output이 강제로 inhibit되어야 한다.
+- 목적:
+  - 준비되지 않은 상태에서 pulse가 남아 나가는 것을 차단한다.
+- 구현 범위:
+  - A/B 파트의 `control_enabled`, `system_ready`, `emg_active`, `servo_on` 조건을 받아 output gate를 건다.
+  - `PulseControl_SetFrequency()` 내부와 상위 호출부 양쪽에서 방어한다.
+- 완료 기준:
+  - `READY=false`일 때 어떠한 pulse도 출력되지 않는다.
+  - estop 시 stop latency가 기준 안에 들어온다.
+- 검증 방법:
+  - power-on
+  - disable
+  - estop 시나리오 측정
+- 산출물:
+  - output inhibit truth table
+  - stop latency 캡처
+
+### `REQ-D-021`: line driver enable 구조를 실제 하드웨어와 일치하게 추상화해야 한다.
+- 목적:
+  - pulse용 / direction용 라인드라이버가 분리된 하드웨어를 코드도 그대로 반영하게 만든다.
+- 구현 범위:
+  - pulse driver enable과 dir driver enable이 실제로 분리 핀인지, 공유 핀인지 문서로 확정한다.
+  - 분리 핀이 있다면 코드도 분리 관리한다.
+  - 공유 핀이면 그 제한을 명시하고, enable sequencing 영향도 기록한다.
+- 완료 기준:
+  - enable 구조가 회로도와 코드에서 모순되지 않는다.
+- 검증 방법:
+  - hardware pinmap review
+  - enable pin GPIO 캡처
+- 산출물:
+  - line driver interface 문서
+  - pinmap 업데이트
+
+### `REQ-D-022`: pulse control 진단 구조체를 제공해야 한다.
+- 목적:
+  - requested와 applied 사이 차이를 나중에 분석 가능하게 만든다.
+- 구현 범위:
+  - 최소 `requested_hz`, `applied_hz`, `arr`, `ccr`, `direction`, `busy`, `driver_enable`, `last_stop_reason`, `last_reverse_reason`를 조회 가능하게 한다.
+  - snapshot 또는 debug vars와 연동해도 좋다.
+- 완료 기준:
+  - UART/CubeMonitor에서 actuator 상태를 재구성할 수 있다.
+- 검증 방법:
+  - `+1deg`, `-1deg`, stop, estop 각각에서 snapshot 저장
+- 산출물:
+  - diagnostic struct 정의
+  - example snapshot
+
+### `REQ-D-023`: continuous mode와 step mode는 계약과 코드 경계가 분리되어야 한다.
+- 목적:
+  - 하나의 타이머를 두 모드가 섞어 쓰면서 상태가 꼬이는 문제를 막는다.
+- 구현 범위:
+  - 모드 전환 정책
+  - busy semantics
+  - interrupt 사용 조건
+  - stop semantics
+  - 를 명시한다.
+  - test/debug용 고정 pulse mode가 있으면 production path와 분리한다.
+- 완료 기준:
+  - 어떤 시점에 continuous와 step이 동시에 타이머를 건드리지 않는다.
+- 검증 방법:
+  - mode transition test
+  - repeated stop/start test
+- 산출물:
+  - mode contract 문서
+  - negative test 로그
+
+### `REQ-D-024`: waveform verification matrix를 만들어야 한다.
+- 목적:
+  - 방향, 주파수, stop, reverse를 눈으로만 보지 않고 측정 기준으로 관리한다.
+- 구현 범위:
+  - 최소 항목을 `100Hz`, `1kHz`, `10kHz`, stop, reverse, estop`으로 정의한다.
+  - 각 항목마다 `freq error`, `duty`, `setup/hold`, `stop latency`, `glitch count`를 기록한다.
+- 완료 기준:
+  - 대표 파형 캡처와 수치표가 존재한다.
+- 검증 방법:
+  - scope
+  - logic analyzer
+- 산출물:
+  - waveform matrix
+  - capture set
+
+### `REQ-D-025`: residual pulse와 glitch는 수치 기준으로 제한되어야 한다.
+- 목적:
+  - "거의 괜찮다" 수준이 아니라, reverse / estop 시 몇 개의 잔류 pulse가 허용되는지 명확히 한다.
+- 구현 범위:
+  - `disable`, `estop`, `reverse`별 residual pulse 허용량을 정의한다.
+  - 측정 방법과 fail 기준을 함께 적는다.
+- 완료 기준:
+  - 반복 시험에서 허용 기준을 만족한다.
+  - 실패 시 원인 분류가 가능하다.
+- 검증 방법:
+  - 100회 반복 측정
+- 산출물:
+  - residual pulse spec
+  - repeat test result

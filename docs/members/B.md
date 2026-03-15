@@ -273,3 +273,136 @@ B 파트는 아래 자료가 있으면 강하다.
 가장 추천하는 포트폴리오 문장:
 
 > 안전 초기 상태, homing, ESTOP, recovery를 분리해서 설계하고, 서보 인가와 EMG 제어를 startup state machine으로 연결해 조향 액추에이터의 운전 가능 조건을 명확히 정의했다.
+
+## 10. 지금부터 팀원 B에게 할당할 상세 개발 REQ
+
+이 섹션은 B 파트를 "실제 차량/벤치에서 안전하게 켜고, 안전하게 멈추고, 안전하게 다시 올리는" 책임으로 다시 쪼갠 실행형 요구사항이다. B 파트는 릴레이와 homing을 각각 따로 만드는 것이 아니라, startup과 recovery를 하나의 state machine으로 닫는 것이 핵심이다.
+
+### `REQ-B-017`: startup state machine을 코드로 구현해야 한다.
+- 목적:
+  - 지금처럼 초기화 코드가 순차 호출만 되고 운전 가능 조건이 불명확한 상태를 없앤다.
+- 구현 범위:
+  - 최소 상태를 `BOOT`, `SERVO_OFF`, `SERVO_ON_WAIT`, `HOMING`, `READY`, `RUN`, `ESTOP_LATCH`, `RECOVERY`로 정의한다.
+  - 상태 전이마다 entry action, exit condition, timeout, failure action을 둔다.
+- 완료 기준:
+  - state diagram 1장과 실제 코드 enum/state variable이 일치한다.
+  - 부팅 로그만 봐도 현재 상태를 알 수 있다.
+- 검증 방법:
+  - cold boot 10회 반복
+  - UART state transition log 확인
+- 산출물:
+  - startup state machine 문서
+  - state transition log
+
+### `REQ-B-018`: homing은 startup path 안으로 실제 통합되어야 한다.
+- 목적:
+  - 부팅 시점을 무조건 `0deg`로 믿는 상대 영점 방식에서 벗어나 절대 기준 또는 검증된 영점을 확보한다.
+- 구현 범위:
+  - `ADC init -> sample validity check -> homing reference decision -> encoder reset/offset apply -> homing validation` 흐름을 startup state 안에 넣는다.
+  - homing skip 조건이 있다면 그것도 명시적으로 관리한다.
+- 완료 기준:
+  - homing 성공 전에는 `RUN` 진입이 차단된다.
+  - homing 실패 시 fault reason이 남고 `READY`로 가지 않는다.
+- 검증 방법:
+  - 정상 부팅
+  - ADC 이상값/센서 분리 상태 부팅
+- 산출물:
+  - homing sequence 문서
+  - success/fail 로그 세트
+
+### `REQ-B-019`: relay truth table과 GPIO 시퀀스를 문서와 코드에서 동일하게 유지해야 한다.
+- 목적:
+  - `SVON`, `EMG`, `Enable`, `Pulse allowed`의 관계를 누구나 같은 의미로 이해하게 만든다.
+- 구현 범위:
+  - 각 상태에서 `SVON`, `EMG`, `pulse inhibit`, `control enable` 허용 여부를 표로 고정한다.
+  - `Relay_ServoOn`, `Relay_ServoOff`, `Relay_Emergency`, `Relay_EmergencyRelease`의 지연 시간과 순서를 정의한다.
+- 완료 기준:
+  - GPIO 레벨 정의와 문서 truth table이 모순되지 않는다.
+  - logic analyzer로 시퀀스가 재현된다.
+- 검증 방법:
+  - GPIO 캡처
+  - 상태별 readback 로그
+- 산출물:
+  - relay truth table
+  - GPIO timing capture
+
+### `REQ-B-020`: ESTOP은 latch 상태로 유지되고 명시적 clear 절차 없이는 해제되면 안 된다.
+- 목적:
+  - 일시적 신호 복구만으로 갑자기 재가동하는 위험을 제거한다.
+- 구현 범위:
+  - `ESTOP_LATCH` 상태를 독립적으로 두고, clear API 또는 operator 승인 이벤트를 만들어야 한다.
+  - `AUTO/MANUAL` 모드 복귀만으로 자동 해제되지 않게 한다.
+- 완료 기준:
+  - `X` 또는 fault로 ESTOP이 걸리면 명시적 clear 전까지 `RUN` 복귀가 차단된다.
+  - clear 시 precondition 검증 로그가 남는다.
+- 검증 방법:
+  - ESTOP 20회 반복
+  - clear 없이 재enable 시도
+- 산출물:
+  - ESTOP clear 절차 문서
+  - negative test log
+
+### `REQ-B-021`: watchdog reset, brownout, software reset 후에는 항상 safe startup으로 복귀해야 한다.
+- 목적:
+  - 리셋 원인이 불분명한 상태에서 이전 운전 상태를 이어받는 위험을 막는다.
+- 구현 범위:
+  - reset reason을 읽어서 로그에 남긴다.
+  - 어떤 reset이든 `SERVO_OFF` 또는 equivalent safe state부터 재진입한다.
+  - 필요하면 reset 후 fault history를 보존한다.
+- 완료 기준:
+  - watchdog reset 후 자동 pulse 출력이 없다.
+  - reset cause가 boot log에 남는다.
+- 검증 방법:
+  - watchdog intentionally trigger
+  - reset reason 로그 확인
+- 산출물:
+  - reset handling 정책
+  - boot log 예시
+
+### `REQ-B-022`: A, C, D와 연결되는 ready precondition contract를 정의해야 한다.
+- 목적:
+  - startup 완료 여부를 감으로 판단하지 않고, 파트 간 조건 계약으로 관리한다.
+- 구현 범위:
+  - `homing complete`, `sensor valid`, `driver ready`, `emg released`, `fault clear`, `manual arm`을 `READY` 조건으로 묶는다.
+  - B 파트가 이 조건의 최종 gatekeeper 역할을 하도록 만든다.
+- 완료 기준:
+  - `READY=false` 이유를 비트마스크나 로그로 확인할 수 있다.
+  - 어느 조건이 빠져도 `RUN` 진입이 차단된다.
+- 검증 방법:
+  - 조건 하나씩 누락시키는 negative test
+- 산출물:
+  - ready contract 표
+  - precondition bitmask 정의
+
+### `REQ-B-023`: startup / recovery / estop 전이는 timestamp와 reason을 남기는 event log를 가져야 한다.
+- 목적:
+  - 나중에 "왜 그 상태에서 멈췄는지"를 UART 로그만으로 복원할 수 있게 만든다.
+- 구현 범위:
+  - 각 상태 전이에 `timestamp`, `from`, `to`, `reason`, `precondition result`를 남긴다.
+  - 최근 N개 event를 circular buffer로 조회 가능하게 해도 좋다.
+- 완료 기준:
+  - 현장 로그 하나로 startup에서 run까지, estop에서 recovery까지 추적 가능하다.
+- 검증 방법:
+  - boot-run-estop-recovery 시퀀스 1회 전체 로그 저장
+- 산출물:
+  - event log 포맷
+  - 대표 로그 세트
+
+### `REQ-B-024`: startup / homing / estop은 positive test뿐 아니라 negative test coverage까지 확보해야 한다.
+- 목적:
+  - "잘 될 때만 되는" 수준을 넘어서 현업형 안전 신뢰성을 확보한다.
+- 구현 범위:
+  - 센서 미연결
+  - homing timeout
+  - relay 명령 후 상태 미반영
+  - operator estop during homing
+  - recovery 중 재fault
+  - 위 5개 이상의 negative case를 시험한다.
+- 완료 기준:
+  - 각 negative case에서 safe state로 귀결되고 로그가 남는다.
+  - `RUN` 우회 진입이 없다.
+- 검증 방법:
+  - negative test checklist 수행
+- 산출물:
+  - failure case report
+  - coverage 표
