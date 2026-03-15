@@ -257,3 +257,153 @@ C 파트는 아래 자료가 좋다.
 가장 추천하는 포트폴리오 문장:
 
 > TIM4 encoder와 ADC absolute sensor를 각각 raw 데이터와 공학 단위로 정규화하고, wrap 처리와 plausibility check를 통해 제어기가 믿고 사용할 수 있는 센서 파이프라인으로 발전시켰다.
+
+## 10. 지금부터 팀원 C에게 할당할 상세 개발 REQ
+
+이 섹션은 C 파트를 "그냥 센서를 읽는 역할"이 아니라, 제어기가 믿어도 되는 센서 데이터를 만들어내는 책임으로 다시 쪼갠 실행형 요구사항이다. 지금 가장 시급한 것은 encoder sign과 wrap 문제를 먼저 닫는 것이다.
+
+### `REQ-C-017`: encoder 회전 방향과 count 부호 관계를 물리 기준으로 확정해야 한다.
+- 목적:
+  - 지금처럼 `target`은 바뀌는데 `current` 부호가 맞는지 확신할 수 없는 상태를 끝낸다.
+- 구현 범위:
+  - 축을 실제 시계/반시계로 움직였을 때 `raw_count`, `delta_count`, `motor_deg`, `steering_deg`가 어떻게 변해야 하는지 정의한다.
+  - 필요하면 `ENCODER_SIGN` 매크로를 도입해 부호를 한 곳에서 반전 가능하게 한다.
+- 완료 기준:
+  - 손회전 시험에서 방향별 `current` 부호가 기대와 항상 일치한다.
+- 검증 방법:
+  - hand turn CW/CCW 테스트
+  - `P` snapshot과 logic analyzer `ENC_A/B` 비교
+- 산출물:
+  - encoder sign 확인표
+  - 캡처 1세트
+
+### `REQ-C-018`: 16비트 encoder를 누적 unwrap count로 확장해야 한다.
+- 목적:
+  - 현재 `TIM4` wrap 때문에 큰 각도에서 위치가 튀는 문제를 제거한다.
+- 구현 범위:
+  - 이전 raw count와 현재 raw count 차이를 이용해 `delta_count`를 계산한다.
+  - wrap crossing 시 `accum_count`가 연속적으로 증가/감소하도록 만든다.
+  - `GetRawCounter()`, `GetDeltaCount()`, `GetAccumCount()`, `GetAngleDeg()` 역할을 분리한다.
+- 완료 기준:
+  - wrap 구간을 지나도 angle discontinuity가 없어야 한다.
+  - 최소 30분 long-run에서 discontinuity 0건이어야 한다.
+- 검증 방법:
+  - long rotation test
+  - wrap boundary 집중 시험
+- 산출물:
+  - unwrap 설계 문서
+  - long-run CSV
+
+### `REQ-C-019`: 모든 센서 샘플은 freshness와 timestamp를 가져야 한다.
+- 목적:
+  - 오래된 값을 현재값처럼 써서 제어가 잘못 판단하는 것을 막는다.
+- 구현 범위:
+  - encoder와 ADC 모두 마지막 갱신 tick 또는 age를 제공한다.
+  - sample age가 threshold를 넘으면 stale warning/fault를 발생시킨다.
+- 완료 기준:
+  - 센서 업데이트가 멈추면 bounded time 내 stale fault가 검출된다.
+- 검증 방법:
+  - 센서 입력 차단 또는 업데이트 중단 시뮬레이션
+- 산출물:
+  - freshness rule
+  - stale detection log
+
+### `REQ-C-020`: velocity / acceleration plausibility 진단을 도입해야 한다.
+- 목적:
+  - 엔코더 glitch나 계산 오류를 단순 위치값만으로는 놓치지 않게 한다.
+- 구현 범위:
+  - `velocity estimate`, `acceleration estimate`를 계산한다.
+  - 물리적으로 불가능한 급변이나 sign flip을 warning/fault로 분리한다.
+- 완료 기준:
+  - glitch 주입 시 velocity fault 또는 warning이 발생한다.
+  - 정상 저속 움직임에서는 false positive가 낮아야 한다.
+- 검증 방법:
+  - 저속/고속 수동 회전
+  - injected jump test
+- 산출물:
+  - threshold 근거
+  - fault log
+
+### `REQ-C-021`: ADC absolute sensor는 calibration, range, 무결성 정보를 포함해야 한다.
+- 목적:
+  - ADC를 homing용 참고 센서로 쓰려면 raw 값만으로는 부족하다.
+- 구현 범위:
+  - `raw`, `voltage`, `angle`, `valid`, `range_status`를 제공한다.
+  - calibration offset/gain/range/version/checksum 또는 동등한 무결성 정보를 둔다.
+  - 재부팅 후 calibration 복원 정책을 정한다.
+- 완료 기준:
+  - calibration 적용 전후 angle 차이를 설명할 수 있다.
+  - out-of-range와 disconnect를 구분해 진단할 수 있다.
+- 검증 방법:
+  - ADC sweep
+  - sensor disconnect / saturation 시험
+- 산출물:
+  - calibration format
+  - ADC validation log
+
+### `REQ-C-022`: encoder와 ADC는 cross-check 진단 경로를 가져야 한다.
+- 목적:
+  - 단일 센서 오류를 다른 센서로 교차 검증해 조기에 잡는다.
+- 구현 범위:
+  - 두 센서를 같은 축 기준 단위로 맞춘다.
+  - `|encoder_angle - adc_angle|`가 threshold를 넘는 경우 warning/fault 정책을 정의한다.
+  - homing 중과 runtime 중 허용 오차를 분리한다.
+- 완료 기준:
+  - 센서 불일치 시 로그와 fault가 남는다.
+  - 정상 상태에서는 허용 오차 안으로 유지된다.
+- 검증 방법:
+  - cross-check trend 기록
+  - 센서 편향 인위 주입
+- 산출물:
+  - cross-check threshold 표
+  - 비교 그래프
+
+### `REQ-C-023`: commanded direction과 sensor delta 방향 불일치를 진단해야 한다.
+- 목적:
+  - D 파트의 direction 경로 문제와 C 파트의 sensor sign 문제를 빠르게 분리한다.
+- 구현 범위:
+  - `requested direction`, `DIR pin state`, `encoder delta sign`을 같은 주기 기준으로 비교한다.
+  - 일정 시간 이상 불일치하면 `direction mismatch` 이벤트를 올린다.
+- 완료 기준:
+  - 실제 방향이 반대로 돌거나 sensor sign이 뒤집히면 탐지된다.
+- 검증 방법:
+  - `+1deg`, `-1deg` 반복 시험
+  - deliberate polarity inversion 시험
+- 산출물:
+  - mismatch log
+  - triage guide
+
+### `REQ-C-024`: 센서 API는 raw / normalized / validated 계층으로 분리해야 한다.
+- 목적:
+  - 다른 파트가 센서 내부 구현을 몰라도 일관된 의미의 데이터를 사용할 수 있게 한다.
+- 구현 범위:
+  - raw layer: raw count, raw ADC
+  - normalized layer: motor_deg, steering_deg, voltage
+  - validated layer: validity, age, fault, plausibility
+  - 함수와 구조체 이름에 계층 의미가 드러나게 정리한다.
+- 완료 기준:
+  - A/B 파트가 같은 API를 보고 센서 사용 의미를 이해할 수 있다.
+- 검증 방법:
+  - header review
+  - API 사용처 점검
+- 산출물:
+  - sensor API 정리안
+  - call-site mapping
+
+### `REQ-C-025`: 장시간 안정성 데이터셋을 남겨야 한다.
+- 목적:
+  - 센서 품질을 감이 아니라 연속 데이터로 증명한다.
+- 구현 범위:
+  - 정지 drift
+  - 저속 sweep
+  - 반복 왕복
+  - 장시간 유지
+  - 최소 4종 데이터셋을 정의한다.
+- 완료 기준:
+  - 각 데이터셋에 측정 조건, 보드 상태, 샘플 수, 결과 요약이 붙는다.
+- 검증 방법:
+  - CubeMonitor 또는 CSV logger
+- 산출물:
+  - `encoder_longrun_*.csv`
+  - `adc_noise_*.csv`
+  - `sensor_crosscheck_*.csv`

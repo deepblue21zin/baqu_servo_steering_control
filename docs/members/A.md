@@ -302,3 +302,142 @@ A 파트는 아래 흐름으로 정리하면 좋다.
 가장 추천하는 포트폴리오 문장:
 
 > UDP 명령을 받아 1ms 주기의 encoder-feedback PID 위치제어로 pulse/direction을 생성했고, ESTOP과 latency 계측을 함께 설계해 제어기 자체의 동작성과 검증 가능성을 동시에 확보했다.
+
+## 10. 지금부터 팀원 A에게 할당할 상세 개발 REQ
+
+이 섹션은 "바로 개발 티켓으로 쪼개서 맡길 수 있는 수준"으로 다시 쓴 실행형 요구사항이다. A 파트는 제어기이므로, 입력 단위와 센서 단위가 명확하지 않으면 나머지 파트가 모두 흔들린다. 따라서 가장 먼저 sign, unit, enable 조건, fault 동작을 닫아야 한다.
+
+### `REQ-A-017`: steering sign / motor sign / encoder sign 규약을 하나로 고정해야 한다.
+- 목적:
+  - `target`, `current`, `error`, `output`, `DIR`의 부호가 모두 같은 물리 의미를 갖도록 만든다.
+- 구현 범위:
+  - `+steering_deg`가 실제 조향축에서 어느 방향인지 문서로 고정한다.
+  - `+motor_deg`, `+encoder_count`, `DIR=1`이 각각 무엇을 뜻하는지 명시한다.
+  - 필요하면 compile-time polarity 매크로를 둬서 `encoder sign`, `dir sign`, `steering sign`을 독립적으로 바꿀 수 있게 한다.
+- 완료 기준:
+  - `-1deg`, `0deg`, `+1deg` 입력 시 UART snapshot에서 `T/C/E/O` 부호가 기대와 일치한다.
+  - logic analyzer에서 `DIR` 변화와 실제 회전 방향이 문서와 일치한다.
+- 검증 방법:
+  - UART `P` snapshot 3세트 저장
+  - `PE10`, `ENC_A`, `ENC_B` 동시 측정
+- 산출물:
+  - sign matrix 1장
+  - 로그 1세트
+
+### `REQ-A-018`: 제어기는 부팅 직후 자동 enable되지 말고 arm 조건이 만족될 때만 enable되어야 한다.
+- 목적:
+  - 센서 극성이나 초기 위치가 잘못된 상태에서 전원 인가 직후 모터가 갑자기 움직이는 것을 막는다.
+- 구현 범위:
+  - 기본 상태를 `CTRL_MODE_IDLE`, `control_enabled=false`로 유지한다.
+  - `Enable`은 B 파트의 startup state machine이 `READY`를 선언했을 때만 허용한다.
+  - keyboard test에서도 `E` 입력 없이는 pulse가 나가지 않도록 한다.
+- 완료 기준:
+  - 전원 인가 후 10초 이상 아무 입력이 없을 때 `PE9`에 pulse가 없어야 한다.
+  - `READY` 미충족 상태에서 `Enable` 요청 시 명확한 거부 로그가 남아야 한다.
+- 검증 방법:
+  - power-on 후 `P` snapshot
+  - `PE9` logic analyzer 확인
+- 산출물:
+  - enable precondition 목록
+  - power-on safe log
+
+### `REQ-A-019`: 위치 오차가 충분히 작을 때는 정지로 수렴하는 deadband / hold 정책이 있어야 한다.
+- 목적:
+  - 지금처럼 작은 오차에서도 최소 pulse가 계속 나가서 속도제어처럼 보이는 현상을 제거한다.
+- 구현 범위:
+  - `|error| < tolerance`와 `|velocity| < threshold`를 동시에 만족하면 `output=0`, `PulseControl_Stop()`으로 전환한다.
+  - `stable_time_ms`와 실제 정지 상태가 같은 의미를 갖도록 정리한다.
+  - 필요하면 `hold zone`, `release zone`을 분리해 hunting을 줄인다.
+- 완료 기준:
+  - `0 -> 5deg -> 0deg` step 후 목표 근처에서 pulse가 멈춘다.
+  - steady-state에서 `dbg_pwm_cmd`가 0으로 떨어진다.
+- 검증 방법:
+  - CubeMonitor의 `dbg_err_mdeg`, `dbg_pwm_cmd`
+  - stop 직후 `PE9` scope 측정
+- 산출물:
+  - deadband parameter 기록
+  - step response CSV
+
+### `REQ-A-020`: 목표값 입력은 validation, clamp, rate limit를 통과한 뒤에만 제어기로 들어가야 한다.
+- 목적:
+  - 비정상 명령이 제어기를 흔들거나 actuator에 급격한 출력을 만들지 않게 한다.
+- 구현 범위:
+  - `NaN`, `Inf`, out-of-range, stale target, repeated stale sequence를 차단한다.
+  - `steering_deg -> motor_deg` 변환 전후 둘 다 범위를 검사한다.
+  - target step이 너무 크면 slew limit 또는 rate limit를 적용한다.
+- 완료 기준:
+  - 비정상 입력에서 `SetTarget()`이 실패 코드와 원인을 남긴다.
+  - 큰 step 입력에서도 `output`이 즉시 포화로 튀지 않고 제한된 기울기로 변한다.
+- 검증 방법:
+  - keyboard test로 `999`, `nan`, 급격한 부호 전환 시험
+  - target / output trend 확인
+- 산출물:
+  - 입력 validation 정책
+  - negative test 로그
+
+### `REQ-A-021`: fault manager는 구분 가능한 코드, latch, clear 조건을 가져야 한다.
+- 목적:
+  - `angle limit`, `tracking error`, `sensor stale`, `sensor sign mismatch`, `deadline miss`, `comm timeout`, `operator estop`을 구분해서 후속 조치를 다르게 할 수 있게 만든다.
+- 구현 범위:
+  - 단일 `fault_flag` 대신 bitmask 또는 enum+detail 구조를 도입한다.
+  - 각 fault에 대해 `detect condition`, `latched 여부`, `clear 조건`, `safe action`을 정의한다.
+  - `PositionControl_Enable()` 재진입 시 fault를 무조건 지우지 않도록 수정한다.
+- 완료 기준:
+  - fault 발생 후 reason이 snapshot 또는 구조체에서 조회 가능하다.
+  - clear 조건이 만족되지 않으면 재enable이 거부된다.
+- 검증 방법:
+  - tracking error injection
+  - stale sensor simulation
+  - ESTOP 후 재enable 시험
+- 산출물:
+  - fault list
+  - clear matrix
+
+### `REQ-A-022`: 제어기 진단 데이터는 사후 분석이 가능할 정도로 충분해야 한다.
+- 목적:
+  - "왜 그 순간 그런 방향으로 돌았는지"를 UART/CubeMonitor만 보고 재구성할 수 있어야 한다.
+- 구현 범위:
+  - `actual dt`, `saturation`, `last_fault`, `fault timestamp`, `enable precondition`, `target source`, `loop overrun count`를 상태 구조체나 debug 변수로 제공한다.
+  - 적어도 `target/current/error/output/direction/raw_count`는 같은 시점 기준으로 읽히도록 정리한다.
+- 완료 기준:
+  - 현장 로그만으로 오동작 시나리오를 재현 설명할 수 있다.
+  - snapshot 한 줄에 원인 추론에 필요한 값이 빠지지 않는다.
+- 검증 방법:
+  - UART snapshot review
+  - CubeMonitor variable set 검토
+- 산출물:
+  - debug variable list
+  - snapshot format 문서
+
+### `REQ-A-023`: 제어 성능 평가는 감으로 하지 말고 step response 기준으로 정량화해야 한다.
+- 목적:
+  - PID 튜닝과 개선 효과를 팀 전체가 같은 기준으로 비교하게 만든다.
+- 구현 범위:
+  - 표준 step sequence를 정의한다.
+  - `settling time`, `overshoot`, `steady-state error`, `deadline miss`, `estop reaction`을 자동 또는 반자동으로 기록한다.
+  - `baseline`과 `after`를 같은 조건으로 비교한다.
+- 완료 기준:
+  - 최소 3개의 대표 step에 대한 CSV와 요약 표가 있다.
+  - gain 변경 전/후 비교가 가능하다.
+- 검증 방법:
+  - CubeMonitor log
+  - UART CSV
+- 산출물:
+  - `pos_step_*.csv`
+  - tuning result 표
+
+### `REQ-A-024`: C 파트 unwrap 완료 전까지는 safe operating envelope를 제어기에서 강제해야 한다.
+- 목적:
+  - 현재 16비트 encoder wrap 상태에서 큰 각도 테스트를 하다가 제어가 튀는 것을 막는다.
+- 구현 범위:
+  - 임시 제한으로 safe steering range를 더 보수적으로 줄인다.
+  - unwrap 미완료 상태에서는 large-angle 명령을 거부하거나 warning을 남긴다.
+  - C 파트의 unwrap 완료 후 제한 완화 절차를 문서화한다.
+- 완료 기준:
+  - unsafe range 명령 시 명확히 거부된다.
+  - 팀 전체가 "현재 가능한 벤치 범위"를 동일하게 이해한다.
+- 검증 방법:
+  - `±5deg`, `±10deg`, `±20deg` 단계 시험
+- 산출물:
+  - temporary safe envelope 문서
+  - reject log
