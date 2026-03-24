@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Steering Engineering Portal</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="page-shell">
+    <aside class="side-nav">
+      <div class="brand-block">
+        <p class="eyebrow">Industry View</p>
+        <h1>Steering Engineering Portal</h1>
+        <p class="brand-copy">
+          자율주행 조향 서브컨트롤러를 처음 보는 사람도
+          아키텍처, 동작 방식, 증거, 다음 개발 방향을 한 번에 이해하도록 정리한 로컬 설명 포털이다.
+        </p>
+        <p class="baseline">
+          Current baseline: no-homing command lifecycle runtime + `putty.log` + `26-03-15_0935`, Doxygen snapshot, runtime code on `feature/position_control`
+        </p>
+      </div>
+
+      <nav class="nav-list">
+        <button type="button" class="nav-link" data-target="overview">프로젝트 목표</button>
+        <button type="button" class="nav-link" data-target="simulation">구동 방식 / 동적 시뮬레이션</button>
+        <button type="button" class="nav-link" data-target="interfaces">정보 전달 / 규격</button>
+        <button type="button" class="nav-link" data-target="analysisflow">현업식 분석 흐름</button>
+        <button type="button" class="nav-link" data-target="implementation">현재 구현</button>
+        <button type="button" class="nav-link" data-target="logs">로그 / 분석 방법</button>
+        <button type="button" class="nav-link" data-target="evaluation">현업 평가</button>
+        <button type="button" class="nav-link" data-target="issues">현재 문제</button>
+        <button type="button" class="nav-link" data-target="reqs">앞으로 구현할 REQ</button>
+        <button type="button" class="nav-link" data-target="team">팀원 6명 분배</button>
+        <button type="button" class="nav-link" data-target="code">코드 탐색</button>
+        <button type="button" class="nav-link" data-target="links">Doxygen / 코드 브라우저</button>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <section id="overview" class="panel hero-panel">
+        <div class="section-head">
+          <p class="eyebrow">Project Goal</p>
+          <h2>조향 서브컨트롤러가 실제로 해야 하는 일</h2>
+        </div>
+
+        <div class="hero-grid">
+          <article class="hero-copy card">
+            <h3>프로젝트 목표</h3>
+            <p>
+              이 프로젝트의 역할은 상위 제어기에서 받은 <strong>조향축 기준 목표값</strong>을
+              STM32가 <strong>1ms 폐루프 제어</strong>와 <strong>fail-safe</strong>를 통해
+              실제 조향 액추에이터에 안전하게 전달하는 것이다.
+            </p>
+            <ul class="check-list">
+              <li>외부 명령을 `steering_deg` 기준으로 받고 내부에서는 `motor_deg / encoder_count / pulse`로 변환한다.</li>
+              <li>센서, 제어기, 액추에이터, 릴레이, 통신, 로그 증거까지 하나의 runtime으로 묶는다.</li>
+              <li>실동작과 함께 latency, fault, traceability를 수치로 남긴다.</li>
+              <li>자율주행 조향 기준으로 startup, homing, recovery, ESTOP 계약을 설명 가능해야 한다.</li>
+            </ul>
+          </article>
+
+          <article class="card spec-card">
+            <h3>핵심 설계 기준</h3>
+            <div class="metric-grid">
+              <div class="metric-box">
+                <span class="metric-label">MCU</span>
+                <strong>STM32F429ZI</strong>
+              </div>
+              <div class="metric-box">
+                <span class="metric-label">Loop</span>
+                <strong>1 ms</strong>
+              </div>
+              <div class="metric-box">
+                <span class="metric-label">Gear Ratio</span>
+                <strong>12 : 1</strong>
+              </div>
+              <div class="metric-box">
+                <span class="metric-label">Control Range</span>
+                <strong>&plusmn;45 deg steering</strong>
+              </div>
+            </div>
+            <div class="spec-note">
+              <p><strong>12:1 기어비 기준</strong></p>
+              <ul class="plain-list">
+                <li>1 steering deg = 12 motor deg</li>
+                <li>1 steering deg = 1600 encoder count</li>
+                <li>1 steering deg = 4000 pulse</li>
+                <li>45 steering deg = 540 motor deg = 72000 count = 180000 pulse</li>
+              </ul>
+            </div>
+          </article>
+        </div>
+
+        <div class="kpi-strip" id="kpi-strip"></div>
+
+        <div class="architecture-stack">
+          <div class="flow-node accent">Upper Controller</div>
+          <div class="flow-arrow">UDP / steering_deg</div>
+          <div class="flow-node">ethernet_communication.c</div>
+          <div class="flow-arrow">mode + target + misc</div>
+          <div class="flow-node">main.c Scheduler</div>
+          <div class="flow-arrow">1ms interrupt_flag</div>
+          <div class="flow-node accent">position_control.c</div>
+          <div class="flow-arrow">signed pulse_hz</div>
+          <div class="flow-node">pulse_control.c</div>
+          <div class="flow-arrow">PF / PR differential</div>
+          <div class="flow-node accent">L7 Driver + Motor + 12:1 Steering</div>
+        </div>
+      </section>
+
+      <section id="simulation" class="panel">
+        <div class="section-head">
+          <p class="eyebrow">Conceptual Model</p>
+          <h2>목표에 부합하는 동적 시뮬레이션</h2>
+          <p class="section-copy">
+            아래 시뮬레이션은 <strong>설명용 모델</strong>이다. 현재 실측 로그와 분리해서,
+            목표 조향각이 들어왔을 때 이상적인 fixed-speed move가 어떤 양으로 움직여야 하는지 보여준다.
+          </p>
+        </div>
+
+        <div class="sim-layout">
+          <article class="card controls-card">
+            <h3>Simulation Controls</h3>
+
+            <label class="control-label" for="target-slider">
+              Target steering angle
+              <span id="target-readout">15.0 deg</span>
+            </label>
+            <input id="target-slider" type="range" min="-45" max="45" step="1" value="15">
+
+            <label class="control-label" for="freq-slider">
+              Fixed pulse frequency
+              <span id="freq-readout">100000 Hz</span>
+            </label>
+            <input id="freq-slider" type="range" min="10000" max="500000" step="5000" value="100000">
+
+            <div class="sim-actions">
+              <button type="button" id="replay-sim" class="sim-button">0 deg에서 다시 재생</button>
+              <span id="sim-status" class="sim-status">standby</span>
+            </div>
+
+            <div class="sim-progress">
+              <div id="sim-progress-fill" class="sim-progress-fill"></div>
+            </div>
+
+            <div class="metric-grid sim-metrics">
+              <div class="metric-box">
+                <span class="metric-label">Motor target</span>
+                <strong id="motor-target-value">180 deg</strong>
+              </div>
+              <div class="metric-box">
+                <span class="metric-label">Encoder count</span>
+                <strong id="encoder-target-value">24000</strong>
+              </div>
+              <div class="metric-box">
+                <span class="metric-label">Pulse budget</span>
+                <strong id="pulse-target-value">60000</strong>
+              </div>
+              <div class="metric-box">
+                <span class="metric-label">Ideal move time</span>
+                <strong id="time-target-value">0.60 s</strong>
+              </div>
+            </div>
+
+            <div class="status-banner" id="freq-status">
+              현재 firmware clamp는 100000 Hz다. 100000 Hz 초과는 설계 목표일 뿐, 현재 코드로는 그대로 재현되지 않는다.
+            </div>
+          </article>
+
+          <article class="card simulation-card">
+            <h3>Steering / Motor Coupling</h3>
+            <div class="dial-row">
+              <div class="dial-card">
+                <span class="dial-label">Steering axis</span>
+                <div class="dial">
+                  <div class="dial-target" id="steering-target-marker"></div>
+                  <div class="dial-needle" id="steering-needle"></div>
+                </div>
+                <p id="steering-caption" class="dial-caption">Target +15 deg / Current 0 deg</p>
+              </div>
+              <div class="dial-card">
+                <span class="dial-label">Motor axis</span>
+                <div class="dial motor-dial">
+                  <div class="dial-target motor-target" id="motor-target-marker"></div>
+                  <div class="dial-needle motor-needle" id="motor-needle"></div>
+                </div>
+                <p id="motor-caption" class="dial-caption">Target +180 deg / Current 0 deg</p>
+              </div>
+            </div>
+
+            <div class="trace-area">
+              <div class="trace-header">
+                <h4>Ideal move trace</h4>
+                <span class="trace-badge">simulation only</span>
+              </div>
+              <svg id="ideal-trace" viewBox="0 0 640 240" class="trace-svg" aria-label="Ideal steering response chart"></svg>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="interfaces" class="panel">
+        <div class="section-head">
+          <p class="eyebrow">Data Contracts</p>
+          <h2>받고 보내는 정보 종류와 규격</h2>
+          <p class="section-copy">
+            현업에서는 기능보다 <strong>단위와 계약</strong>이 먼저 보인다. 이 프로젝트는 현재
+            `steering_deg`와 `motor_deg`가 혼재되어 있으므로, 아래 표를 기준으로 정리해야 한다.
+          </p>
+        </div>
+
+        <div class="table-card card">
+          <table class="contract-table">
+            <thead>
+              <tr>
+                <th>Producer</th>
+                <th>Consumer</th>
+                <th>Payload</th>
+                <th>Current Format</th>
+                <th>Recommended Contract</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>`ethernet_communication.c`</td>
+                <td>`main.c`</td>
+                <td>`AutoDrive_Packet_t.steering_angle`</td>
+                <td>`float`</td>
+                <td>`steering_deg`, clamp `[-45, +45]`</td>
+              </tr>
+              <tr>
+                <td>`main.c`</td>
+                <td>`position_control.c`</td>
+                <td>target</td>
+                <td>`float`</td>
+                <td>`motor_deg`, converted via `SteeringDegToMotorDeg()`</td>
+              </tr>
+              <tr>
+                <td>`encoder_reader.c`</td>
+                <td>`position_control.c`</td>
+                <td>current angle</td>
+                <td>`float`</td>
+                <td>`motor_deg` + raw/accum count 함께 제공</td>
+              </tr>
+              <tr>
+                <td>`position_control.c`</td>
+                <td>`pulse_control.c`</td>
+                <td>actuator command</td>
+                <td>`int32_t`</td>
+                <td>signed `pulse_hz`</td>
+              </tr>
+              <tr>
+                <td>`position_control.c`</td>
+                <td>`relay_control.c`</td>
+                <td>emergency request</td>
+                <td>function call</td>
+                <td>latched fail-safe event + reason code</td>
+              </tr>
+              <tr>
+                <td>`main.c` / `position_control.c`</td>
+                <td>UART / plots / CubeMonitor</td>
+                <td>`CSV`, `LATENCY_STAGE`, `dbg_*`</td>
+                <td>text + global vars</td>
+                <td>traceability artifact set</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="dual-grid">
+          <article class="card">
+            <h3>저장되는 로그 종류</h3>
+            <ul class="plain-list">
+              <li>`CSV_HEADER`, `CSV,...` : target / current / error / output / dir / enc</li>
+              <li>`CMD_START`, `CMD_REACHED`, `CMD_TIMEOUT`, `CMD_ABORT`, `CMD_FAULT` : 명령 단위 lifecycle event</li>
+              <li>`LATENCY_BATCH_BEGIN`, `LATENCY_STAGE`, `LATENCY_BATCH_END` : Sense, Control, Actuate, Comms timing</li>
+              <li>`[KB][target]`, `[KB][snapshot]` : bench interaction snapshot</li>
+              <li>`dbg_*` globals : CubeIDE watch, CubeMonitor, UART 분석용</li>
+              <li>`Doc/change_code/YYYY-MM-DD.md` : 설계/코드 변경 traceability</li>
+            </ul>
+          </article>
+
+          <article class="card">
+            <h3>현업식 분석 흐름</h3>
+            <ol class="number-list">
+              <li>Upper command, target unit, gear ratio, pulse conversion이 같은 기준인지 먼저 확인한다.</li>
+              <li>센서값이 실제 변하는지 `enc_raw`, `current_deg`, `ADC angle`부터 확인한다.</li>
+              <li>그 다음에 `error`, `output`, `dir`, `pulse`를 비교한다.</li>
+              <li>마지막에 latency, deadline miss, fail-safe trace를 붙여 deterministic behavior를 설명한다.</li>
+            </ol>
+          </article>
+        </div>
+      </section>
+
+      <section id="analysisflow" class="panel">
+        <div class="section-head">
+          <p class="eyebrow">Engineering Review Flow</p>
+          <h2>현업식 분석 흐름이 코드 구조에 어떻게 적용되어 있는가</h2>
+          <p class="section-copy">
+            이 섹션은 `upper command -> unit conversion -> sensor truth -> control loop -> evidence` 순서로
+            지금 코드가 어디까지 구현됐는지 보여준다. 단위, 변수, 루프 동작, 로그 예시를 연결해
+            처음 보는 사람도 현재 steering runtime의 판단 포인트를 따라갈 수 있게 만든 항목이다.
+          </p>
+        </div>
+
+        <div id="analysis-step-grid" class="analysis-step-grid"></div>
+
+        <article class="card analysis-loop-card">
+          <h3>실제 제어루프와 변수 흐름</h3>
+          <div id="analysis-loop-view" class="analysis-loop-view"></div>
+        </article>
+
+        <div id="analysis-log-grid" class="analysis-log-grid"></div>
+      </section>
+
+      <section id="implementation" class="panel">
+        <div class="section-head">
+          <p class="eyebrow">Current State</p>
+          <h2>지금까지 구현된 내용</h2>
+        </div>
+
+        <div class="status-grid">
+          <article class="status-card done">
+            <h3>Runtime skeleton</h3>
+            <p>`main.c` 1ms scheduler, `PositionControl_Update()`, watchdog refresh, keyboard bench mode</p>
+            <span class="state-tag">implemented</span>
+          </article>
+          <article class="status-card done">
+            <h3>Actuator path</h3>
+            <p>`pulse_control.c`에서 PE9 pulse, PE10 direction, line-driver 기반 PF/PR differential output path 정리</p>
+            <span class="state-tag">implemented</span>
+          </article>
+          <article class="status-card done">
+            <h3>Latency instrumentation</h3>
+            <p>DWT 기반 `Sense/Control/Actuate/Comms` 배치 측정과 CSV/UART logging 파이프라인</p>
+            <span class="state-tag">implemented</span>
+          </article>
+          <article class="status-card done">
+            <h3>Command lifecycle trace</h3>
+            <p>`command_id`, `CMD_START/REACHED/TIMEOUT/ABORT/FAULT`, CSV/DIAG/snapshot 기반 명령 단위 추적이 반영됨</p>
+            <span class="state-tag">implemented</span>
+          </article>
+          <article class="status-card partial">
+            <h3>Closed-loop tracking proof</h3>
+            <p>코드 구조는 존재하지만 latest logs에서 encoder/current가 움직이지 않아 실증은 미완료</p>
+            <span class="state-tag">partial</span>
+          </article>
+          <article class="status-card partial">
+            <h3>Homing and startup</h3>
+            <p>`homing.c`와 `adc_potentiometer.c`는 존재하지만 실제 startup state machine에는 미통합</p>
+            <span class="state-tag">partial</span>
+          </article>
+          <article class="status-card risk">
+            <h3>System readiness contract</h3>
+            <p>boot-time auto-enable, fault latch, unwrap, encoder-ADC cross-check contract가 아직 없다. reached/timeout/abort lifecycle는 1차 반영됨</p>
+            <span class="state-tag">gap</span>
+          </article>
+        </div>
+      </section>
+
+      <section id="logs" class="panel">
+        <div class="section-head">
+          <p class="eyebrow">Measured Evidence</p>
+          <h2>로그 기록, 시각화, 그리고 해석 방법</h2>
+          <p class="section-copy">
+            이 섹션은 <strong>실측 로그 기반</strong>이다. 아래 해석은 `putty.log`, `26-03-15_0935`,
+            `plot_putty_log.py`, 생성된 PNG를 기준으로 작성했다.
+          </p>
+        </div>
+
+        <div class="dual-grid">
+          <article class="card">
+            <div class="trace-header">
+              <h3>Actual control trace</h3>
+              <span class="trace-badge measured">measured</span>
+            </div>
+            <svg id="actual-trace" viewBox="0 0 640 260" class="trace-svg" aria-label="Measured steering response chart"></svg>
+            <p class="caption">
+              실제 latest run에서는 target은 바뀌지만 `current_deg`가 0 부근에 고정되고 `enc_raw`가 한 값으로만 남는다.
+            </p>
+            <img class="plot-image" src="../../putty_log/plots/control_trace.png" alt="Control trace plot generated from PuTTY log">
+          </article>
+
+          <article class="card">
+            <div class="trace-header">
+              <h3>Latency evidence</h3>
+              <span class="trace-badge measured">measured</span>
+            </div>
+            <div id="latency-bars" class="latency-bars"></div>
+            <img class="plot-image" src="../../putty_log/plots/latency_trace.png" alt="Latency trace plot generated from PuTTY log">
+          </article>
+        </div>
+
+        <div class="dual-grid">
+          <article class="card">
+            <h3>현재 로그에서 확인되는 사실</h3>
+            <ul class="plain-list">
+              <li>control samples 154개에서 `enc_raw` unique 값이 1개뿐이라 current feedback path가 검증되지 않았다.</li>
+              <li>대신 `CMD_START/REACHED/TIMEOUT/ABORT/FAULT` 이벤트가 추가되어 명령 단위 추적 기반은 갖춰졌다.</li>
+              <li>`DIR`은 로그상 0/1로 변하므로 MCU 내부 direction GPIO는 바뀌고 있다.</li>
+              <li>latency는 대체로 낮지만 interactive logging 구간에서 Comms max가 12 ms 이상 튀는 outlier가 있다.</li>
+              <li>deadline miss는 전체 220 batch 중 non-zero batch가 존재하므로 strict real-time claim에는 조건 설명이 필요하다.</li>
+            </ul>
+          </article>
+
+          <article class="card">
+            <h3>분석 절차</h3>
+            <ol class="number-list">
+              <li>UART raw log를 PuTTY session log로 저장한다.</li>
+              <li>`python putty_log/plot_putty_log.py ...`로 control / latency plot을 생성한다.</li>
+              <li>`target`, `current`, `error`, `output`, `dir`, `enc`를 먼저 본다.</li>
+              <li>그 다음 `LATENCY_STAGE`와 deadline miss를 붙여 timing evidence를 만든다.</li>
+              <li>이 결과를 `Doc/change_code`, 팀원 REQ, Doxygen source와 연결해 traceability를 만든다.</li>
+            </ol>
+          </article>
+        </div>
+      </section>
+
+      <section id="evaluation" class="panel">
+        <div class="section-head">
+          <p class="eyebrow">Industry Evaluation</p>
+          <h2>현업 면접관 시점의 프로젝트 완성도 평가</h2>
+          <p class="section-copy">
+            여기서 100%는 <strong>자율주행 조향 서브컨트롤러로서 production-complete</strong>한 상태를 의미한다.
+            즉 코드가 돌아가는 수준이 아니라, 센서 진실성, command lifecycle, fail-safe, startup safety, 반복 검증, traceability까지 모두 설명 가능한 상태를 기준으로 본다.
+          </p>
+        </div>
+
+        <div class="dual-grid evaluation-grid">
+          <article class="card score-card" id="evaluation-summary"></article>
+          <article class="card" id="evaluation-interviewer"></article>
+        </div>
+
+        <article class="card">
+          <h3>세부 평가 축</h3>
+          <div id="evaluation-bars" class="evaluation-bars"></div>
+        </article>
+
+        <div class="dual-grid">
+          <article class="card">
+            <h3>왜 아직 100%가 아닌가</h3>
+            <div id="evaluation-reasons" class="evaluation-list"></div>
+          </article>
+          <article class="card">
+            <h3>100%가 되기 위해 필요한 것</h3>
+            <div id="evaluation-to100" class="evaluation-list"></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="issues" class="panel">
+        <div class="section-head">
+          <p class="eyebrow">Current Problems</p>
+          <h2>지금의 문제와 왜 중요한가</h2>
+        </div>
+
+        <div class="issue-grid">
+          <article class="issue-card critical">
+            <h3>P0. Encoder feedback stuck</h3>
+            <p>
+              latest measured logs에서 `enc_raw`가 `32769`로 고정된다.
+              따라서 현재 상태는 “closed-loop steering validated”라고 부를 수 없다.
+            </p>
+            <span class="evidence">Evidence: unique encoder values = 1</span>
+          </article>
+
+          <article class="issue-card warning">
+            <h3>P1. System readiness closure incomplete</h3>
+            <p>
+              `command_id`와 `CMD_START/REACHED/TIMEOUT/ABORT/FAULT`는 추가됐지만,
+              boot-time auto-enable, latched fault, startup gating, sensor cross-check까지는 아직 닫히지 않았다.
+            </p>
+            <span class="evidence">Evidence: Need ready contract + fault latch + clear policy</span>
+          </article>
+
+          <article class="issue-card warning">
+            <h3>P1. 16-bit unwrap missing</h3>
+            <p>
+              `±45 deg steering`를 커버하려면 `±72000 count`가 필요한데,
+              현재 centered 16-bit raw 방식은 full range 보장이 어렵다.
+            </p>
+            <span class="evidence">Need: accum_count / wrap tracking</span>
+          </article>
+
+          <article class="issue-card warning">
+            <h3>P1. Boot-time auto enable</h3>
+            <p>
+              main runtime에서 homing/state validation 없이 enable까지 자동 진행되어
+              startup safety 설명이 약하다.
+            </p>
+            <span class="evidence">Need: startup state machine + arm contract</span>
+          </article>
+
+          <article class="issue-card warning">
+            <h3>P1. Output capability mismatch</h3>
+            <p>
+              constants에는 1 MHz가 있지만 실제 `pulse_control.c`는 100 kHz clamp,
+              bench discussion에서는 500 kHz fixed move를 원한다. 계약을 하나로 정리해야 한다.
+            </p>
+            <span class="evidence">Need: single actuator contract</span>
+          </article>
+
+          <article class="issue-card advisory">
+            <h3>P2. Fail-safe traceability gap</h3>
+            <p>
+              ESTOP, comm timeout, sensor fault, startup inhibit, recovery clear 조건이
+              fault taxonomy와 event log로 완전히 묶여 있지 않다.
+            </p>
+            <span class="evidence">Need: latched fault + clear policy + timestamps</span>
+          </article>
+        </div>
+      </section>
+
+      <section id="reqs" class="panel">
+        <div class="section-head">
+          <p class="eyebrow">Backlog</p>
+          <h2>앞으로 구현해야 하는 REQ</h2>
+          <p class="section-copy">
+            아래 REQ는 `자율주행 조향`, `fail-safe`, `debug completeness`, `portfolio traceability`를 기준으로 다시 묶은 것이다.
+          </p>
+        </div>
+        <div id="req-table" class="req-table"></div>
+      </section>
+
+      <section id="team" class="panel">
+        <div class="section-head">
+          <p class="eyebrow">Team Split</p>
+          <h2>구현해야 하는 REQ를 팀원 6명으로 분배</h2>
+          <p class="section-copy">
+            기존 A-D 분석 문서를 기반으로, 실제 개발 운영이 쉬운 6개 워크스트림으로 확장했다.
+          </p>
+        </div>
+        <div id="team-grid" class="team-grid"></div>
+      </section>
+
+      <section id="code" class="panel">
+        <div class="section-head">
+          <p class="eyebrow">Code Explorer</p>
+          <h2>코드 구조를 눌러보며 이해하는 탐색 화면</h2>
+          <p class="section-copy">
+            핵심 파일을 누르면 책임, 입출력, 현재 리스크, 핵심 스니펫이 나온다.
+            전체 소스는 Doxygen source와 원본 C 파일 링크로 이어진다.
+          </p>
+        </div>
+
+        <div class="module-map" id="module-map"></div>
+
+        <div class="code-browser">
+          <div class="module-list" id="module-list"></div>
+          <article class="module-detail card" id="module-detail">
+            <p>왼쪽에서 모듈을 선택하면 상세 정보가 표시된다.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="links" class="panel">
+        <div class="section-head">
+          <p class="eyebrow">Deep Dive</p>
+          <h2>Doxygen / Full Code Browser / Reference Links</h2>
+        </div>
+
+        <div class="link-grid">
+          <a class="link-card" href="../doxygen/html/index.html">
+            <strong>Doxygen Runtime Portal</strong>
+            <span>README, include graph, call graph, source browser</span>
+          </a>
+          <a class="link-card" href="../doxygen/html/files.html">
+            <strong>Full Code Browser</strong>
+            <span>파일 목록 기반 전체 탐색</span>
+          </a>
+          <a class="link-card" href="../doxygen/html/annotated.html">
+            <strong>Doxygen Home</strong>
+            <span>구조체와 타입 중심 탐색</span>
+          </a>
+          <a class="link-card" href="../README.md">
+            <strong>Documentation Index</strong>
+            <span>README, REQ, member docs, latency docs</span>
+          </a>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
