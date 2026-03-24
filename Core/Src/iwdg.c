@@ -38,12 +38,8 @@ void MX_IWDG_Init(void)
 
   /* USER CODE END IWDG_Init 1 */
   hiwdg.Instance = IWDG;
-  /* ~0.5s watchdog window (@LSI ~32kHz):
-   * timeout ~= (Reload + 1) * Prescaler / LSI
-   *         ~= (249 + 1) * 64 / 32000 = 0.5s
-   * LSI 오차로 실제 시간은 다소 변동 가능. */
-  hiwdg.Init.Prescaler = IWDG_PRESCALER_64;
-  hiwdg.Init.Reload = 249;
+  hiwdg.Init.Prescaler = IWDG_PRESCALER_256;
+  hiwdg.Init.Reload = 4095;
   if (HAL_IWDG_Init(&hiwdg) != HAL_OK)
   {
     Error_Handler();

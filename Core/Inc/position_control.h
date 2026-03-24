@@ -54,6 +54,34 @@ typedef enum {
     CTRL_MODE_EMERGENCY = 99   // 비상정지
 } ControlMode_t;
 
+typedef enum {
+    CMD_IDLE = 0,
+    CMD_ACTIVE,
+    CMD_REACHED,
+    CMD_TIMEOUT,
+    CMD_ABORTED,
+    CMD_FAULTED
+} CommandState_t;
+
+typedef enum {
+    CMD_SRC_NONE = 0,
+    CMD_SRC_UDP,
+    CMD_SRC_KEYBOARD,
+    CMD_SRC_SERVICE,
+    CMD_SRC_LOCALTEST
+} CommandSource_t;
+
+typedef enum {
+    CMD_RESULT_NONE = 0,
+    CMD_RESULT_REACHED,
+    CMD_RESULT_TIMEOUT,
+    CMD_RESULT_ESTOP,
+    CMD_RESULT_DISABLED,
+    CMD_RESULT_REPLACED,
+    CMD_RESULT_FAULT_LIMIT,
+    CMD_RESULT_FAULT_TRACKING
+} CommandResult_t;
+
 // ========== 데이터 구조 ==========
 typedef struct {
     float Kp;                   // 비례 게인
@@ -73,6 +101,21 @@ typedef struct {
     ControlMode_t mode;           // 현재 모드
     PosCtrl_Error_t last_error;   // 마지막 에러 코드
 } PositionControl_State_t;
+
+typedef struct {
+    uint32_t command_id;
+    CommandState_t state;
+    CommandSource_t source;
+    CommandResult_t result;
+    float target_steering_deg;
+    float target_motor_deg;
+    float start_steering_deg;
+    float final_steering_deg;
+    float final_error_deg;
+    uint32_t start_ms;
+    uint32_t end_ms;
+    uint32_t timeout_ms;
+} CommandLifecycle_t;
 
 
 // ========== 성능 모니터링 ==========
@@ -107,10 +150,12 @@ void PositionControl_Update(void);
 
 // ========== 목표 설정 (외부에서 호출) ==========
 int PositionControl_SetTarget(float target_deg);
+int PositionControl_SetTargetWithSource(float target_deg, CommandSource_t source);
 float PositionControl_GetTarget(void);
 
 // ========== 상태 읽기 ==========
 PositionControl_State_t PositionControl_GetState(void);
+CommandLifecycle_t PositionControl_GetCommandLifecycle(void);
 float PositionControl_GetCurrentAngle(void);
 float PositionControl_GetError(void);
 bool PositionControl_IsStable(void);
@@ -131,6 +176,7 @@ void PositionControl_SetSafetyLimits(SafetyLimits_t* limits);
 bool PositionControl_IsSafe(void);
 bool PositionControl_CheckSafety(void);
 void PositionControl_EmergencyStop(void);
+void PositionControl_AbortCommand(CommandResult_t reason);
 
 // ========== 성능 모니터링 ==========
 PosCtrl_Stats_t PositionControl_GetStats(void);

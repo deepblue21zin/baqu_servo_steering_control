@@ -30,6 +30,12 @@ float EncoderReader_GetAngleDeg(void);
 int32_t EncoderReader_GetCount(void);
 
 /**
+ * @brief Get hardware timer raw counter value
+ * @return Raw timer counter (0~65535)
+ */
+uint16_t EncoderReader_GetRawCounter(void);
+
+/**
  * @brief Reset encoder count to zero
  */
 void EncoderReader_Reset(void);

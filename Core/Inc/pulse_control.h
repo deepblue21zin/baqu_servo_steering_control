@@ -3,8 +3,10 @@
  *
  * Created on: 2026.01.19.
  * Author: 고진성
- * Function: STM32 to L7 Servo Drive Pulse Generation
- * Hardware: NUCLEO-F767ZI -> SN75176 -> L7 Servo Drive
+ * Function: STM32 to L7 Servo Drive Pulse/Direction Generation
+ * Hardware:
+ *   - PE9(TIM1_CH1) -> pulse line driver input -> PF+/PF-
+ *   - PE10(GPIO)    -> direction line driver input -> PR+/PR-
  */
 
 #ifndef INC_PULSE_CONTROL_H_

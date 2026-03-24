@@ -4,8 +4,8 @@
  * Created on: 2026.01.19.
  * Author: 고진성 (Modified by Baqu for PID Support)
  * * [Hardware Pin Map]
- * Pulse Output : PE9  (TIM1_CH1) -> SN75176 -> L7(Pin 9, PF+)
- * Dir Output   : PE10 (GPIO_OUT) -> SN75176 -> L7(Pin 11, PR+)
+ * Pulse Output : PE9  (TIM1_CH1) -> pulse line driver input -> L7 PF+/PF-
+ * Dir Output   : PE10 (GPIO_OUT) -> direction line driver input -> L7 PR+/PR-
  * * [Logic]
  * 1. Step Mode: TIM1 PWM Interrupt (정해진 거리 이동)
  * 2. Speed Mode: TIM1 Frequency Change (PID 제어용 연속 이동)
@@ -20,8 +20,35 @@
 static TIM_HandleTypeDef *p_htim1;
 static volatile uint32_t remaining_steps = 0;
 static volatile uint8_t is_busy = 0;
+static volatile uint8_t line_drivers_enabled = 0;
+static volatile MotorDirection current_direction = DIR_CCW;
 
 extern TIM_HandleTypeDef htim1;
+
+static void PulseControl_EnableSharedLineDrivers(void)
+{
+    if (line_drivers_enabled != 0U) {
+        return;
+    }
+
+    HAL_GPIO_WritePin(LINE_DRIVER_DE_GPIO_Port, LINE_DRIVER_DE_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(LINE_DRIVER_REN_GPIO_Port, LINE_DRIVER_REN_Pin, GPIO_PIN_SET);
+    line_drivers_enabled = 1U;
+}
+
+static void PulseControl_ApplyDirection(MotorDirection dir)
+{
+    if (current_direction == dir) {
+        return;
+    }
+
+    if (dir == DIR_CW) {
+        HAL_GPIO_WritePin(PR_TX_GPIO_Port, PR_TX_Pin, GPIO_PIN_SET);
+    } else {
+        HAL_GPIO_WritePin(PR_TX_GPIO_Port, PR_TX_Pin, GPIO_PIN_RESET);
+    }
+    current_direction = dir;
+}
 
 /**
   * @brief 펄스 제어 초기화
@@ -29,10 +56,12 @@ extern TIM_HandleTypeDef htim1;
 void PulseControl_Init(void) {
     p_htim1 = &htim1;
     is_busy = 0;
+    current_direction = DIR_CW;
+    PulseControl_EnableSharedLineDrivers();
 
-    // 방향 핀 초기 상태 설정 (Safety)
+    // 방향 line driver 입력의 초기 상태를 설정한다.
     // CubeMX(main.c)에서 PE10을 GPIO_Output으로 설정했는지 꼭 확인하세요.
-    HAL_GPIO_WritePin(DIR_PIN_GPIO_Port, DIR_PIN_Pin, GPIO_PIN_RESET);
+    PulseControl_ApplyDirection(DIR_CCW);
 }
 
 /**
@@ -58,6 +87,8 @@ void pulse_reverse(uint32_t count) {
  * DIR 핀을 High/Low로 바꿔주는 로직을 추가했습니다.
  */
 void PulseControl_SetFrequency(int32_t freq_hz) {
+    PulseControl_EnableSharedLineDrivers();
+
     // 1. 정지 신호 처리
     if (freq_hz == 0) {
         // 인터럽트 방식이 아닌 일반 Stop 사용 (PID 제어는 연속적이므로)
@@ -68,9 +99,9 @@ void PulseControl_SetFrequency(int32_t freq_hz) {
     // 2. 방향 제어 (가장 중요!)
     // freq_hz가 양수면 CW, 음수면 CCW (하드웨어 연결에 따라 반대일 수 있음)
     if (freq_hz > 0) {
-        HAL_GPIO_WritePin(DIR_PIN_GPIO_Port, DIR_PIN_Pin, GPIO_PIN_SET);   // 정방향
+        PulseControl_ApplyDirection(DIR_CW);
     } else {
-        HAL_GPIO_WritePin(DIR_PIN_GPIO_Port, DIR_PIN_Pin, GPIO_PIN_RESET); // 역방향
+        PulseControl_ApplyDirection(DIR_CCW);
         freq_hz = -freq_hz; // 주파수 계산을 위해 양수로 변환
     }
 
@@ -108,16 +139,13 @@ void PulseControl_SetFrequency(int32_t freq_hz) {
 void PulseControl_SendSteps(uint32_t steps, MotorDirection dir) {
     if (steps == 0 || is_busy) return; // 방어 코드
 
+    PulseControl_EnableSharedLineDrivers();
     is_busy = 1;
     remaining_steps = steps;
 
     // [방향 제어]
-    // PE10 핀의 High/Low 상태로 SN75176을 통해 L7 드라이브의 방향을 결정
-    if (dir == DIR_CW) {
-        HAL_GPIO_WritePin(DIR_PIN_GPIO_Port, DIR_PIN_Pin, GPIO_PIN_SET);   // CW
-    } else {
-        HAL_GPIO_WritePin(DIR_PIN_GPIO_Port, DIR_PIN_Pin, GPIO_PIN_RESET); // CCW
-    }
+    // PE10은 direction line driver 입력으로 사용된다.
+    PulseControl_ApplyDirection(dir);
 
     // [펄스 발사]
     // TIM1 PWM 시작 및 인터럽트 활성화

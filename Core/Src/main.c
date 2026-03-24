@@ -34,9 +34,11 @@
 #include "ethernet_communication.h"
 #include "homing.h"
 #include "adc_potentiometer.h"
+#include "constants.h"
 #include "latency_profiler.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -48,6 +50,10 @@
 /* USER CODE BEGIN PD */
 #define AUTO_FIXED_PULSE_TEST  0
 #define AUTO_FIXED_PULSE_HZ    500000
+#define KEYBOARD_TEST_MODE     1
+#define KEYBOARD_STEP_DEG      1.0f
+#define PERIODIC_CSV_LOG_ENABLE 1
+#define PERIODIC_CSV_LOG_PERIOD_MS 100U
 
 /* USER CODE END PD */
 
@@ -73,6 +79,106 @@ static void Latency_TryAutoReport(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 static uint32_t g_latency_report_seq = 0U;
+static float g_keyboard_target_steer_deg = 0.0f;
+static char g_keyboard_line_buf[32] = {0};
+static uint8_t g_keyboard_line_len = 0U;
+#if PERIODIC_CSV_LOG_ENABLE
+static uint8_t g_periodic_csv_enabled = 1U;
+#endif
+
+static float TargetSteeringDegToMotorDeg(float steering_deg)
+{
+    return SteeringDegToMotorDeg(steering_deg);
+}
+
+static float TargetMotorDegToSteeringDeg(float motor_deg)
+{
+    return MotorDegToSteeringDeg(motor_deg);
+}
+
+static const char* Main_CommandStateName(CommandState_t state)
+{
+    switch (state) {
+    case CMD_ACTIVE:
+        return "ACTIVE";
+    case CMD_REACHED:
+        return "REACHED";
+    case CMD_TIMEOUT:
+        return "TIMEOUT";
+    case CMD_ABORTED:
+        return "ABORTED";
+    case CMD_FAULTED:
+        return "FAULTED";
+    case CMD_IDLE:
+    default:
+        return "IDLE";
+    }
+}
+
+static const char* Main_CommandResultName(CommandResult_t result)
+{
+    switch (result) {
+    case CMD_RESULT_REACHED:
+        return "REACHED";
+    case CMD_RESULT_TIMEOUT:
+        return "TIMEOUT";
+    case CMD_RESULT_ESTOP:
+        return "ESTOP";
+    case CMD_RESULT_DISABLED:
+        return "DISABLED";
+    case CMD_RESULT_REPLACED:
+        return "REPLACED";
+    case CMD_RESULT_FAULT_LIMIT:
+        return "FAULT_LIMIT";
+    case CMD_RESULT_FAULT_TRACKING:
+        return "FAULT_TRACKING";
+    case CMD_RESULT_NONE:
+    default:
+        return "NONE";
+    }
+}
+
+#if PERIODIC_CSV_LOG_ENABLE
+static void PeriodicCsv_PrintHeader(void)
+{
+    printf("CSV_HEADER,ms,mode,target_deg,current_deg,error_deg,output,dir,enc,cmd_id,cmd_state,cmd_result\r\n");
+}
+
+static void PeriodicCsv_Task(void)
+{
+    static uint32_t last_ms = 0U;
+    uint32_t now_ms = HAL_GetTick();
+    PositionControl_State_t s = PositionControl_GetState();
+    CommandLifecycle_t cmd = PositionControl_GetCommandLifecycle();
+    GPIO_PinState dir_state = HAL_GPIO_ReadPin(DIR_PIN_GPIO_Port, DIR_PIN_Pin);
+    uint16_t enc_raw = EncoderReader_GetRawCounter();
+
+    if (g_periodic_csv_enabled == 0U) {
+        return;
+    }
+
+    if ((uint32_t)(now_ms - last_ms) < PERIODIC_CSV_LOG_PERIOD_MS) {
+        return;
+    }
+    last_ms = now_ms;
+
+    printf("CSV,%lu,%d,%.3f,%.3f,%.3f,%.0f,%d,%u,%lu,%d,%d\r\n",
+           (unsigned long)now_ms,
+           (int)PositionControl_GetMode(),
+           TargetMotorDegToSteeringDeg(s.target_angle),
+           TargetMotorDegToSteeringDeg(s.current_angle),
+           TargetMotorDegToSteeringDeg(s.error),
+           s.output,
+           (int)dir_state,
+           (unsigned int)enc_raw,
+           (unsigned long)cmd.command_id,
+           (int)cmd.state,
+           (int)cmd.result);
+}
+#else
+#define PeriodicCsv_PrintHeader() ((void)0)
+#define PeriodicCsv_Task() ((void)0)
+#endif
 
 static void Latency_TryAutoReport(void)
 {
@@ -122,6 +228,194 @@ static void Latency_TryAutoReport(void)
 #endif
 }
 
+#if KEYBOARD_TEST_MODE
+static float KeyboardTest_ClampSteeringDeg(float steering_deg)
+{
+    if (steering_deg > MAX_STEERING_ANGLE) {
+        return MAX_STEERING_ANGLE;
+    }
+    if (steering_deg < MIN_STEERING_ANGLE) {
+        return MIN_STEERING_ANGLE;
+    }
+    return steering_deg;
+}
+
+static void KeyboardTest_ClearLine(void)
+{
+    g_keyboard_line_len = 0U;
+    g_keyboard_line_buf[0] = '\0';
+}
+
+static void KeyboardTest_PrintControlSnapshot(const char *reason)
+{
+    PositionControl_State_t s = PositionControl_GetState();
+    CommandLifecycle_t cmd = PositionControl_GetCommandLifecycle();
+    GPIO_PinState dir_state = HAL_GPIO_ReadPin(DIR_PIN_GPIO_Port, DIR_PIN_Pin);
+    uint16_t enc_raw = EncoderReader_GetRawCounter();
+
+    printf("[KB][%s] T=%.2fdeg C=%.2fdeg E=%.2fdeg O=%.0f DIR=%d ENC=%u CMD=%lu/%s/%s\r\n",
+           reason,
+           TargetMotorDegToSteeringDeg(s.target_angle),
+           TargetMotorDegToSteeringDeg(s.current_angle),
+           TargetMotorDegToSteeringDeg(s.error),
+           s.output,
+           (int)dir_state,
+           (unsigned int)enc_raw,
+           (unsigned long)cmd.command_id,
+           Main_CommandStateName(cmd.state),
+           Main_CommandResultName(cmd.result));
+}
+
+static void KeyboardTest_ApplyTarget(void)
+{
+    float motor_target_deg = SteeringDegToMotorDeg(g_keyboard_target_steer_deg);
+    int ret = PositionControl_SetTargetWithSource(motor_target_deg, CMD_SRC_KEYBOARD);
+
+    printf("[KB] target steer=%.1f deg motor=%.1f deg ret=%d\r\n",
+           g_keyboard_target_steer_deg,
+           motor_target_deg,
+           ret);
+    KeyboardTest_PrintControlSnapshot("target");
+}
+
+static void KeyboardTest_PrintHelp(void)
+{
+    printf("[KB] A:left D:right S:center E:enable Q:disable X:estop P:print L:csv H:help step=%.1f deg\r\n",
+           KEYBOARD_STEP_DEG);
+    printf("[KB] numeric target: type steering deg then Enter. ex) 5, -3.5, 0\r\n");
+}
+
+static void KeyboardTest_ApplyTypedTarget(void)
+{
+    char *end_ptr = NULL;
+    float typed_target_deg = 0.0f;
+
+    g_keyboard_line_buf[g_keyboard_line_len] = '\0';
+    typed_target_deg = strtof(g_keyboard_line_buf, &end_ptr);
+
+    if (end_ptr == g_keyboard_line_buf || *end_ptr != '\0') {
+        printf("[KB] invalid target \"%s\"\r\n", g_keyboard_line_buf);
+        KeyboardTest_ClearLine();
+        return;
+    }
+
+    g_keyboard_target_steer_deg = KeyboardTest_ClampSteeringDeg(typed_target_deg);
+    KeyboardTest_ApplyTarget();
+    KeyboardTest_ClearLine();
+}
+
+static void KeyboardTest_ProcessInput(void)
+{
+    uint8_t ch = 0U;
+
+    if (HAL_UART_Receive(&huart3, &ch, 1, 0U) != HAL_OK) {
+        return;
+    }
+
+    switch (ch) {
+    case '\r':
+    case '\n':
+        if (g_keyboard_line_len > 0U) {
+            KeyboardTest_ApplyTypedTarget();
+        }
+        break;
+
+    case '\b':
+    case 0x7FU:
+        if (g_keyboard_line_len > 0U) {
+            g_keyboard_line_len--;
+            g_keyboard_line_buf[g_keyboard_line_len] = '\0';
+        }
+        break;
+
+    case 'a':
+    case 'A':
+        KeyboardTest_ClearLine();
+        g_keyboard_target_steer_deg = KeyboardTest_ClampSteeringDeg(
+            g_keyboard_target_steer_deg - KEYBOARD_STEP_DEG);
+        KeyboardTest_ApplyTarget();
+        break;
+
+    case 'd':
+    case 'D':
+        KeyboardTest_ClearLine();
+        g_keyboard_target_steer_deg = KeyboardTest_ClampSteeringDeg(
+            g_keyboard_target_steer_deg + KEYBOARD_STEP_DEG);
+        KeyboardTest_ApplyTarget();
+        break;
+
+    case 's':
+    case 'S':
+        KeyboardTest_ClearLine();
+        g_keyboard_target_steer_deg = 0.0f;
+        KeyboardTest_ApplyTarget();
+        break;
+
+    case 'e':
+    case 'E':
+        KeyboardTest_ClearLine();
+        PositionControl_Enable();
+        printf("[KB] control enabled\r\n");
+        break;
+
+    case 'q':
+    case 'Q':
+        KeyboardTest_ClearLine();
+        PositionControl_Disable();
+        printf("[KB] control disabled\r\n");
+        break;
+
+    case 'x':
+    case 'X':
+        KeyboardTest_ClearLine();
+        PositionControl_EmergencyStop();
+        printf("[KB] emergency stop\r\n");
+        break;
+
+    case 'p':
+    case 'P':
+        KeyboardTest_ClearLine();
+        KeyboardTest_PrintControlSnapshot("snapshot");
+        break;
+
+    case 'l':
+    case 'L':
+        KeyboardTest_ClearLine();
+#if PERIODIC_CSV_LOG_ENABLE
+        g_periodic_csv_enabled = (uint8_t)(g_periodic_csv_enabled == 0U ? 1U : 0U);
+        printf("[KB] csv log %s\r\n", (g_periodic_csv_enabled != 0U) ? "enabled" : "disabled");
+        if (g_periodic_csv_enabled != 0U) {
+            PeriodicCsv_PrintHeader();
+        }
+#else
+        printf("[KB] csv log feature disabled at build time\r\n");
+#endif
+        break;
+
+    case 'h':
+    case 'H':
+        KeyboardTest_ClearLine();
+        KeyboardTest_PrintHelp();
+        break;
+
+    default:
+        if ((ch >= '0' && ch <= '9') || ch == '-' || ch == '+' || ch == '.') {
+            if (g_keyboard_line_len < (uint8_t)(sizeof(g_keyboard_line_buf) - 1U)) {
+                g_keyboard_line_buf[g_keyboard_line_len++] = (char)ch;
+                g_keyboard_line_buf[g_keyboard_line_len] = '\0';
+            } else {
+                printf("[KB] input too long\r\n");
+                KeyboardTest_ClearLine();
+            }
+        } else {
+            printf("[KB] unknown key '%c' (0x%02X)\r\n", (char)ch, (unsigned int)ch);
+            KeyboardTest_ClearLine();
+        }
+        break;
+    }
+}
+#endif
+
 /* USER CODE END 0 */
 
 /**
@@ -146,9 +440,9 @@ int main(void)
 
   /* Configure the system clock */
   SystemClock_Config();
-  LatencyProfiler_Init(SystemCoreClock);
 
   /* USER CODE BEGIN SysInit */
+  LatencyProfiler_Init(SystemCoreClock);
 
   /* USER CODE END SysInit */
 
@@ -163,7 +457,7 @@ int main(void)
   MX_LWIP_Init();
   /* USER CODE BEGIN 2 */
 
-  // PE10(DIR)을 GPIO Output으로 명시 재설정 (방향 신호용)
+  // PE10을 direction line driver 입력용 GPIO Output으로 명시 재설정
   GPIO_InitTypeDef GPIO_InitStruct = {0};
   GPIO_InitStruct.Pin = GPIO_PIN_10;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -200,21 +494,34 @@ int main(void)
   //}
   //HAL_Delay(500);
   EncoderReader_Reset(); // 엔코더 카운터 리셋 (0점 기준)
-  PositionControl_SetTarget(0.0f); // 초기 목표 0° (UDP 수신값으로 갱신됨)
+  PositionControl_SetTargetWithSource(TargetSteeringDegToMotorDeg(0.0f), CMD_SRC_LOCALTEST); // 외부 조향각 0° -> 내부 motor_deg
+  g_keyboard_target_steer_deg = 0.0f;
   PositionControl_Enable();
 
+#if KEYBOARD_TEST_MODE
+  KeyboardTest_PrintHelp();
+  PeriodicCsv_PrintHeader();
+#else
   EthComm_UDP_Init(); // UDP 수신 소켓 열기 (MX_LWIP_Init 이후 호출 필수)
+#endif
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   uint32_t debug_cnt = 0;
+#if !KEYBOARD_TEST_MODE
   SteerMode_t prev_mode = STEER_MODE_NONE;
+#endif
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+#if KEYBOARD_TEST_MODE
+    LAT_BEGIN(LAT_STAGE_COMMS);
+    KeyboardTest_ProcessInput();
+    LAT_END(LAT_STAGE_COMMS);
+#else
     /* ── LwIP 폴링: 이더넷 패킷 수신 처리 ── */
     LAT_BEGIN(LAT_STAGE_COMMS);
     MX_LWIP_Process();
@@ -255,11 +562,12 @@ int main(void)
     if (EthComm_HasNewData()) {
         AutoDrive_Packet_t pkt = EthComm_GetLatestData();
         if (mode == STEER_MODE_AUTO || mode == STEER_MODE_MANUAL) {
-            PositionControl_SetTarget(pkt.steering_angle);
+            PositionControl_SetTargetWithSource(TargetSteeringDegToMotorDeg(pkt.steering_angle), CMD_SRC_UDP);
         }
     }
     LAT_END(LAT_STAGE_COMMS);
     prev_mode = mode;
+#endif
 
     /* ── 1ms 제어 루프 ── */
     if (interrupt_flag) {
@@ -280,13 +588,20 @@ int main(void)
             uint32_t enc_raw = __HAL_TIM_GET_COUNTER(&htim4);
             GPIO_PinState dir_state = HAL_GPIO_ReadPin(DIR_PIN_GPIO_Port, DIR_PIN_Pin);
             PositionControl_State_t s = PositionControl_GetState();
+            CommandLifecycle_t cmd = PositionControl_GetCommandLifecycle();
+            float target_steer_deg = TargetMotorDegToSteeringDeg(s.target_angle);
+            float current_steer_deg = TargetMotorDegToSteeringDeg(s.current_angle);
+            float error_steer_deg = TargetMotorDegToSteeringDeg(s.error);
             debug_cnt = 0;
 #if LATENCY_LOG_ENABLE
-            printf("[DIAG] MODE:%d T:%.2f C:%.2f E:%.2f O:%.0f ARR:%lu CCR:%lu DIR:%d ENC:%lu\r\n",
+            printf("[DIAG] MODE:%d CMD:%lu/%s/%s Tst:%.2f Cst:%.2f Est:%.2f O:%.0f ARR:%lu CCR:%lu DIR:%d ENC:%lu\r\n",
                    (int)PositionControl_GetMode(),
-                   s.target_angle,
-                   s.current_angle,
-                   s.error,
+                   (unsigned long)cmd.command_id,
+                   Main_CommandStateName(cmd.state),
+                   Main_CommandResultName(cmd.result),
+                   target_steer_deg,
+                   current_steer_deg,
+                   error_steer_deg,
                    s.output,
                    (unsigned long)arr,
                    (unsigned long)ccr,
@@ -298,10 +613,15 @@ int main(void)
             (void)enc_raw;
             (void)dir_state;
             (void)s;
+            (void)cmd;
+            (void)target_steer_deg;
+            (void)current_steer_deg;
+            (void)error_steer_deg;
 #endif
         }
     }
 
+    PeriodicCsv_Task();
     Latency_TryAutoReport();
     HAL_IWDG_Refresh(&hiwdg);
   }
