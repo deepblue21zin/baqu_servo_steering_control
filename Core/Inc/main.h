@@ -77,8 +77,8 @@ void Error_Handler(void);
 #define DIR_PIN_GPIO_Port GPIOE
 #define RMII_TXD1_Pin GPIO_PIN_13
 #define RMII_TXD1_GPIO_Port GPIOB
-#define LD3_Pin GPIO_PIN_14
-#define LD3_GPIO_Port GPIOB
+#define DBG_LOOP_Pin GPIO_PIN_14
+#define DBG_LOOP_GPIO_Port GPIOB
 #define STLK_RX_Pin GPIO_PIN_8
 #define STLK_RX_GPIO_Port GPIOD
 #define STLK_TX_Pin GPIO_PIN_9
@@ -117,6 +117,18 @@ void Error_Handler(void);
 #define SVON_PIN_CTRL SVON_PIN_Pin
 #define EMG_PORT EMG_PIN_GPIO_Port
 #define EMG_PIN_CTRL EMG_PIN_Pin
+
+// Output path aliases
+// PE9: pulse line driver input -> PF+/PF-
+// PE10: direction line driver input -> PR+/PR-
+#define PR_TX_Pin DIR_PIN_Pin
+#define PR_TX_GPIO_Port DIR_PIN_GPIO_Port
+
+// Shared line driver enable pins for the separated pulse/direction drivers
+#define LINE_DRIVER_DE_Pin LD_DE_Pin
+#define LINE_DRIVER_DE_GPIO_Port LD_DE_GPIO_Port
+#define LINE_DRIVER_REN_Pin LD_REN_Pin
+#define LINE_DRIVER_REN_GPIO_Port LD_REN_GPIO_Port
 
 /* USER CODE END Private defines */
 

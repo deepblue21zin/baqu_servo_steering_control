@@ -17,7 +17,7 @@
 /* 내부 정규화 데이터:
  * - ASMS 5B(mode + joystick), PC 9B(<iIB>)를 파싱해 공통 포맷으로 저장 */
 typedef struct {
-    float    steering_angle;  /* degree, clamp: [-360, +360] */
+    float    steering_angle;  /* steering-axis degree from upper controller */
     uint32_t speed;           /* PC speed raw */
     uint8_t  misc;            /* PC misc raw  */
 } AutoDrive_Packet_t;

@@ -1,6 +1,5 @@
 #include "latency_profiler.h"
-
-#include "core_cm4.h"
+#include "main.h"
 
 #include <stddef.h>
 #include <string.h>

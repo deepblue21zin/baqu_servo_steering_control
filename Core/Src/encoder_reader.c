@@ -44,6 +44,10 @@ int32_t EncoderReader_GetCount(void) {
     return encoder_count;
 }
 
+uint16_t EncoderReader_GetRawCounter(void) {
+    return (uint16_t)__HAL_TIM_GET_COUNTER(&ENCODER_TIMER);
+}
+
 void EncoderReader_Reset(void) {
     __HAL_TIM_SET_COUNTER(&ENCODER_TIMER, 32768);  // TIM4 카운터 중간값으로 리셋
     encoder_count = 0;
