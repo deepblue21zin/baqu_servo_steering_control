@@ -20,10 +20,32 @@ typedef struct {
     int64_t accum_count;
     int32_t offset_count;
     uint32_t sample_tick_ms;
+    uint8_t virtual_feedback_enabled;
+    uint16_t virtual_raw_count;
+    int32_t virtual_delta_count;
+    int64_t virtual_accum_count;
+    uint32_t virtual_sample_tick_ms;
     uint8_t initialized;
 } EncoderReader_State_t; /* MODIFIED(Codex): keep raw/delta/accum/timestamp in one state block. */
 
 static EncoderReader_State_t g_encoder = {0};
+
+static int64_t EncoderReader_UpdateCount(void);
+
+static uint16_t EncoderReader_GetVirtualRawCount(void)
+{
+    int32_t raw32 = (int32_t)ENCODER_COUNTER_CENTER + (int32_t)g_encoder.virtual_accum_count;
+    return (uint16_t)raw32;
+}
+
+static int64_t EncoderReader_GetActiveCount(void)
+{
+    if (g_encoder.virtual_feedback_enabled != 0U) {
+        return g_encoder.virtual_accum_count;
+    }
+
+    return EncoderReader_UpdateCount();
+}
 
 static int64_t EncoderReader_UpdateCount(void)
 {
@@ -50,6 +72,11 @@ int EncoderReader_Init(void)
     g_encoder.accum_count = 0;
     g_encoder.offset_count = 0;
     g_encoder.sample_tick_ms = HAL_GetTick();
+    g_encoder.virtual_feedback_enabled = 0U;
+    g_encoder.virtual_raw_count = (uint16_t)ENCODER_COUNTER_CENTER;
+    g_encoder.virtual_delta_count = 0;
+    g_encoder.virtual_accum_count = 0;
+    g_encoder.virtual_sample_tick_ms = g_encoder.sample_tick_ms;
     g_encoder.initialized = 1U;
 
     printf("[Encoder] Initialized\n");
@@ -63,17 +90,21 @@ float EncoderReader_GetAngleDeg(void)
 
 float EncoderReader_GetMotorDeg(void)
 {
-    int64_t adjusted_count = EncoderReader_UpdateCount() - (int64_t)g_encoder.offset_count;
+    int64_t adjusted_count = EncoderReader_GetActiveCount() - (int64_t)g_encoder.offset_count;
     return (float)adjusted_count * ENCODER_DEG_PER_COUNT;
 }
 
 int32_t EncoderReader_GetCount(void)
 {
-    return (int32_t)(EncoderReader_UpdateCount() - (int64_t)g_encoder.offset_count);
+    return (int32_t)(EncoderReader_GetActiveCount() - (int64_t)g_encoder.offset_count);
 }
 
 int32_t EncoderReader_GetDeltaCount(void)
 {
+    if (g_encoder.virtual_feedback_enabled != 0U) {
+        return g_encoder.virtual_delta_count;
+    }
+
     EncoderReader_UpdateCount();
     return g_encoder.delta_count;
 }
@@ -84,6 +115,17 @@ uint8_t EncoderReader_GetSample(EncoderSample_t *out_sample)
 
     if ((out_sample == NULL) || (g_encoder.initialized == 0U)) {
         return 0U;
+    }
+
+    if (g_encoder.virtual_feedback_enabled != 0U) {
+        now_ms = HAL_GetTick();
+        out_sample->raw_count = g_encoder.virtual_raw_count;
+        out_sample->delta_count = g_encoder.virtual_delta_count;
+        out_sample->accum_count = g_encoder.virtual_accum_count - (int64_t)g_encoder.offset_count;
+        out_sample->motor_deg = (float)out_sample->accum_count * ENCODER_DEG_PER_COUNT;
+        out_sample->sample_tick_ms = g_encoder.virtual_sample_tick_ms;
+        out_sample->age_ms = now_ms - g_encoder.virtual_sample_tick_ms;
+        return 1U;
     }
 
     EncoderReader_UpdateCount();
@@ -104,6 +146,10 @@ uint32_t EncoderReader_GetRawCounter(void)
         return (uint32_t)((uint16_t)__HAL_TIM_GET_COUNTER(&ENCODER_TIMER));
     }
 
+    if (g_encoder.virtual_feedback_enabled != 0U) {
+        return (uint32_t)g_encoder.virtual_raw_count;
+    }
+
     EncoderReader_UpdateCount();
     return (uint32_t)g_encoder.raw_count;
 }
@@ -118,6 +164,10 @@ void EncoderReader_Reset(void)
     g_encoder.accum_count = 0;
     g_encoder.offset_count = 0;
     g_encoder.sample_tick_ms = HAL_GetTick();
+    g_encoder.virtual_raw_count = (uint16_t)ENCODER_COUNTER_CENTER;
+    g_encoder.virtual_delta_count = 0;
+    g_encoder.virtual_accum_count = 0;
+    g_encoder.virtual_sample_tick_ms = g_encoder.sample_tick_ms;
 
     printf("[Encoder] Reset\n");
 }
@@ -126,6 +176,23 @@ void EncoderReader_SetOffset(int32_t offset)
 {
     g_encoder.offset_count = offset;
     printf("[Encoder] Offset set: %ld\n", offset);
+}
+
+void EncoderReader_EnableVirtualFeedback(uint8_t enable)
+{
+    g_encoder.virtual_feedback_enabled = (enable != 0U) ? 1U : 0U;
+    g_encoder.virtual_delta_count = 0;
+    g_encoder.virtual_sample_tick_ms = HAL_GetTick();
+}
+
+void EncoderReader_SetVirtualFeedbackCount(int64_t accum_count)
+{
+    int64_t prev_count = g_encoder.virtual_accum_count;
+
+    g_encoder.virtual_accum_count = accum_count;
+    g_encoder.virtual_delta_count = (int32_t)(accum_count - prev_count);
+    g_encoder.virtual_raw_count = EncoderReader_GetVirtualRawCount();
+    g_encoder.virtual_sample_tick_ms = HAL_GetTick();
 }
 
 uint8_t EncoderReader_IsInitialized(void)

@@ -26,6 +26,8 @@ uint8_t EncoderReader_GetSample(EncoderSample_t *out_sample);
 uint32_t EncoderReader_GetRawCounter(void);
 void EncoderReader_Reset(void);
 void EncoderReader_SetOffset(int32_t offset);
+void EncoderReader_EnableVirtualFeedback(uint8_t enable);
+void EncoderReader_SetVirtualFeedbackCount(int64_t accum_count);
 uint8_t EncoderReader_IsInitialized(void);
 
 #endif /* ENCODER_READER_H */
