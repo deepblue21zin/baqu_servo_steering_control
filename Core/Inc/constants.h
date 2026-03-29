@@ -9,7 +9,7 @@
 #define FULL_ROTATION_DEG       360.0f
 
 // 기구/단위 변환 상수
-#define STEERING_GEAR_RATIO             12.0f
+#define STEERING_GEAR_RATIO             12.5f
 #define MOTOR_DEG_PER_STEERING_DEG      STEERING_GEAR_RATIO
 #define STEERING_DEG_PER_MOTOR_DEG      (1.0f / MOTOR_DEG_PER_STEERING_DEG)
 

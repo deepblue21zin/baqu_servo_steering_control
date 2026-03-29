@@ -1,29 +1,67 @@
 /*
  * pulse_control.c
  *
- * Created on: 2026.01.19.
- * Author: 고진성 (Modified by Baqu for PID Support)
- * * [Hardware Pin Map]
- * Pulse Output : PE9  (TIM1_CH1) -> pulse line driver input -> L7 PF+/PF-
- * Dir Output   : PE10 (GPIO_OUT) -> direction line driver input -> L7 PR+/PR-
- * * [Logic]
- * 1. Step Mode: TIM1 PWM Interrupt (정해진 거리 이동)
- * 2. Speed Mode: TIM1 Frequency Change (PID 제어용 연속 이동)
+ * Pulse Output : PE9  (TIM1_CH1) -> pulse line driver input -> PF+/PF-
+ * Dir Output   : PE10 (GPIO_OUT) -> direction line driver input -> PR+/PR-
  */
 
 #include "pulse_control.h"
 #include "tim.h"
 
+#define PULSECONTROL_MIN_FREQ_HZ         10U
+#define PULSECONTROL_MAX_FREQ_HZ         100000U
+#define PULSECONTROL_DIRECTION_GUARD_MS  1U
 
-
+typedef enum {
+    PULSE_REVERSE_IDLE = 0U,
+    PULSE_REVERSE_WAIT_STOP = 1U,
+    PULSE_REVERSE_WAIT_DIR_SETTLE = 2U
+} PulseReverseState_t;
 
 static TIM_HandleTypeDef *p_htim1;
-static volatile uint32_t remaining_steps = 0;
-static volatile uint8_t is_busy = 0;
-static volatile uint8_t line_drivers_enabled = 0;
+static volatile uint32_t remaining_steps = 0U;
+static volatile uint8_t is_busy = 0U;
+static volatile uint8_t line_drivers_enabled = 0U;
+static volatile uint8_t output_active = 0U;
+static volatile int32_t requested_frequency_hz = 0;
+static volatile uint32_t applied_frequency_hz = 0U;
 static volatile MotorDirection current_direction = DIR_CCW;
+static volatile MotorDirection pending_direction = DIR_CCW;
+static volatile uint32_t pending_frequency_hz = 0U;
+static volatile uint32_t reverse_guard_deadline_ms = 0U;
+static volatile PulseReverseState_t reverse_state = PULSE_REVERSE_IDLE;
 
 extern TIM_HandleTypeDef htim1;
+
+static uint32_t PulseControl_GetTimerClockHz(void)
+{
+    RCC_ClkInitTypeDef clk_init = {0};
+    uint32_t flash_latency = 0U;
+    uint32_t apb2_clock_hz = HAL_RCC_GetPCLK2Freq();
+
+    HAL_RCC_GetClockConfig(&clk_init, &flash_latency);
+    if (clk_init.APB2CLKDivider == RCC_HCLK_DIV1) {
+        return apb2_clock_hz;
+    }
+
+    return apb2_clock_hz * 2U;
+}
+
+static uint32_t PulseControl_ClampFrequencyHz(uint32_t freq_hz)
+{
+    if (freq_hz < PULSECONTROL_MIN_FREQ_HZ) {
+        return PULSECONTROL_MIN_FREQ_HZ;
+    }
+    if (freq_hz > PULSECONTROL_MAX_FREQ_HZ) {
+        return PULSECONTROL_MAX_FREQ_HZ;
+    }
+    return freq_hz;
+}
+
+static uint8_t PulseControl_DeadlineExpired(uint32_t deadline_ms)
+{
+    return ((int32_t)(HAL_GetTick() - deadline_ms) >= 0) ? 1U : 0U;
+}
 
 static void PulseControl_EnableSharedLineDrivers(void)
 {
@@ -38,155 +76,259 @@ static void PulseControl_EnableSharedLineDrivers(void)
 
 static void PulseControl_ApplyDirection(MotorDirection dir)
 {
-    if (current_direction == dir) {
-        return;
-    }
+    GPIO_PinState pin_state = GPIO_PIN_RESET;
 
     if (dir == DIR_CW) {
-        HAL_GPIO_WritePin(PR_TX_GPIO_Port, PR_TX_Pin, GPIO_PIN_SET);
+        pin_state = (DIR_ACTIVE_HIGH_FOR_CW != 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
     } else {
-        HAL_GPIO_WritePin(PR_TX_GPIO_Port, PR_TX_Pin, GPIO_PIN_RESET);
+        pin_state = (DIR_ACTIVE_HIGH_FOR_CW != 0) ? GPIO_PIN_RESET : GPIO_PIN_SET;
     }
+
+    HAL_GPIO_WritePin(PR_TX_GPIO_Port, PR_TX_Pin, pin_state);
     current_direction = dir;
 }
 
-/**
-  * @brief 펄스 제어 초기화
-  */
-void PulseControl_Init(void) {
-    p_htim1 = &htim1;
-    is_busy = 0;
-    current_direction = DIR_CW;
-    PulseControl_EnableSharedLineDrivers();
+static uint32_t PulseControl_CalculateAppliedFrequencyHz(uint32_t period_counts)
+{
+    uint32_t timer_clock_hz = PulseControl_GetTimerClockHz();
+    uint32_t prescaler = p_htim1->Instance->PSC + 1U;
+    uint64_t denominator = (uint64_t)prescaler * (uint64_t)period_counts;
 
-    // 방향 line driver 입력의 초기 상태를 설정한다.
-    // CubeMX(main.c)에서 PE10을 GPIO_Output으로 설정했는지 꼭 확인하세요.
-    PulseControl_ApplyDirection(DIR_CCW);
+    if (denominator == 0U) {
+        return 0U;
+    }
+
+    return (uint32_t)(((uint64_t)timer_clock_hz + (denominator / 2U)) / denominator);
 }
 
-/**
-  * @brief 정방향 펄스 전송 (main.c 호환용 - 테스트용)
-  */
-void pulse_forward(uint32_t count) {
-    PulseControl_SendSteps(count, DIR_CW);
+static void PulseControl_StopOutputInternal(void)
+{
+    __HAL_TIM_DISABLE_IT(p_htim1, TIM_IT_CC1);
+    HAL_TIM_PWM_Stop(p_htim1, TIM_CHANNEL_1);
+    remaining_steps = 0U;
+    is_busy = 0U;
+    output_active = 0U;
+    applied_frequency_hz = 0U;
 }
 
-/**
-  * @brief 역방향 펄스 전송 (main.c 호환용 - 테스트용)
-  */
-void pulse_reverse(uint32_t count) {
-    PulseControl_SendSteps(count, DIR_CCW);
-}
+static void PulseControl_ApplyPwmFrequency(uint32_t freq_hz)
+{
+    uint32_t timer_clock_hz = PulseControl_GetTimerClockHz();
+    uint32_t prescaler = p_htim1->Instance->PSC + 1U;
+    uint64_t denominator = (uint64_t)prescaler * (uint64_t)freq_hz;
+    uint64_t period_counts = 0U;
+    uint32_t autoreload = 0U;
+    uint32_t compare = 0U;
 
-/**
- * @brief PID 제어용 주파수 및 방향 설정 함수 (수정됨)
- * @param freq_hz : PID 계산 결과값 (양수: 정방향, 음수: 역방향, 크기: 속도)
- * * [수정 사항 설명]
- * 기존 코드에는 방향 제어(DIR_PIN) 로직이 빠져 있어, PID가 역방향 명령을 내려도
- * 모터가 한쪽으로만 도는 문제가 있었습니다. 이를 해결하기 위해 부호(+, -)에 따라
- * DIR 핀을 High/Low로 바꿔주는 로직을 추가했습니다.
- */
-void PulseControl_SetFrequency(int32_t freq_hz) {
-    PulseControl_EnableSharedLineDrivers();
-
-    // 1. 정지 신호 처리
-    if (freq_hz == 0) {
-        // 인터럽트 방식이 아닌 일반 Stop 사용 (PID 제어는 연속적이므로)
-        HAL_TIM_PWM_Stop(p_htim1, TIM_CHANNEL_1); 
+    if (denominator == 0U) {
         return;
     }
 
-    // 2. 방향 제어 (가장 중요!)
-    // freq_hz가 양수면 CW, 음수면 CCW (하드웨어 연결에 따라 반대일 수 있음)
-    if (freq_hz > 0) {
-        PulseControl_ApplyDirection(DIR_CW);
-    } else {
-        PulseControl_ApplyDirection(DIR_CCW);
-        freq_hz = -freq_hz; // 주파수 계산을 위해 양수로 변환
+    period_counts = ((uint64_t)timer_clock_hz + (denominator / 2U)) / denominator;
+    if (period_counts < 2U) {
+        period_counts = 2U;
+    }
+    if (period_counts > 65536U) {
+        period_counts = 65536U;
     }
 
-    // 3. 최고 속도 제한 (안전장치, 예: 100kHz)
-    if (freq_hz > 100000) freq_hz = 100000;
-    // 너무 느린 속도 방지 (타이머 분주비 한계 고려)
-    if (freq_hz < 10) freq_hz = 10;
+    autoreload = (uint32_t)(period_counts - 1U);
+    compare = (uint32_t)(period_counts / 2U);
+    if (compare == 0U) {
+        compare = 1U;
+    }
+    if (compare > autoreload) {
+        compare = autoreload;
+    }
 
-    // 4. 주파수(ARR) 계산
-    // 공식: TimerClock / ((PSC+1) * TargetFreq) - 1
-    // MCU의 TIM1 클럭이 180MHz이고 PSC가 215라고 가정 (CubeMX 설정 확인 필)
-    uint32_t timer_clk = 180000000; 
-    uint32_t psc = p_htim1->Instance->PSC;
-    
-    
-    
-    // 0으로 나누기 방지
-    uint32_t arr = (timer_clk / ((psc + 1) * freq_hz)) - 1;
-
-    if (arr > 0xFFFF) arr = 0xFFFF; //16비트 한계
-    if (arr < 1) arr = 1; //최소값 보장 (0 방지)범위 보호
-
-    // 5. 레지스터 업데이트 (주파수 및 듀티비 50% 설정)
-    __HAL_TIM_SET_AUTORELOAD(p_htim1, arr);
-    __HAL_TIM_SET_COMPARE(p_htim1, TIM_CHANNEL_1, arr / 2);
-
-    // 6. PWM 시작
-    // PID 제어 중에는 인터럽트(_IT)를 쓰지 않고 계속 출력만 내보냅니다.
-    HAL_TIM_PWM_Start(p_htim1, TIM_CHANNEL_1);
+    __HAL_TIM_SET_AUTORELOAD(p_htim1, autoreload);
+    __HAL_TIM_SET_COMPARE(p_htim1, TIM_CHANNEL_1, compare);
+    applied_frequency_hz = PulseControl_CalculateAppliedFrequencyHz((uint32_t)period_counts);
 }
 
-/**
-  * @brief 펄스 및 방향 신호 전송 시작 (스텝 모드)
-  */
-void PulseControl_SendSteps(uint32_t steps, MotorDirection dir) {
-    if (steps == 0 || is_busy) return; // 방어 코드
+static void PulseControl_StartContinuousOutput(uint32_t freq_hz)
+{
+    PulseControl_ApplyPwmFrequency(freq_hz);
+
+    if (output_active == 0U) {
+        if (HAL_TIM_PWM_Start(p_htim1, TIM_CHANNEL_1) == HAL_OK) {
+            output_active = 1U;
+        } else {
+            applied_frequency_hz = 0U;
+        }
+    }
+}
+
+static void PulseControl_BeginReverseGuard(MotorDirection dir, uint32_t freq_hz)
+{
+    pending_direction = dir;
+    pending_frequency_hz = freq_hz;
+    PulseControl_StopOutputInternal();
+    reverse_guard_deadline_ms = HAL_GetTick() + PULSECONTROL_DIRECTION_GUARD_MS;
+    reverse_state = PULSE_REVERSE_WAIT_STOP;
+}
+
+static void PulseControl_ServiceReverseGuard(void)
+{
+    if (reverse_state == PULSE_REVERSE_WAIT_STOP) {
+        if (PulseControl_DeadlineExpired(reverse_guard_deadline_ms) == 0U) {
+            return;
+        }
+
+        PulseControl_ApplyDirection(pending_direction);
+        reverse_guard_deadline_ms = HAL_GetTick() + PULSECONTROL_DIRECTION_GUARD_MS;
+        reverse_state = PULSE_REVERSE_WAIT_DIR_SETTLE;
+        return;
+    }
+
+    if (reverse_state == PULSE_REVERSE_WAIT_DIR_SETTLE) {
+        if (PulseControl_DeadlineExpired(reverse_guard_deadline_ms) == 0U) {
+            return;
+        }
+
+        reverse_state = PULSE_REVERSE_IDLE;
+        if (pending_frequency_hz > 0U) {
+            PulseControl_StartContinuousOutput(pending_frequency_hz);
+        }
+    }
+}
+
+void PulseControl_Init(void)
+{
+    p_htim1 = &htim1;
+    remaining_steps = 0U;
+    is_busy = 0U;
+    line_drivers_enabled = 0U;
+    output_active = 0U;
+    requested_frequency_hz = 0;
+    applied_frequency_hz = 0U;
+    current_direction = DIR_CW;
+    pending_direction = DIR_CCW;
+    pending_frequency_hz = 0U;
+    reverse_guard_deadline_ms = 0U;
+    reverse_state = PULSE_REVERSE_IDLE;
 
     PulseControl_EnableSharedLineDrivers();
-    is_busy = 1;
-    remaining_steps = steps;
-
-    // [방향 제어]
-    // PE10은 direction line driver 입력으로 사용된다.
-    PulseControl_ApplyDirection(dir);
-
-    // [펄스 발사]
-    // TIM1 PWM 시작 및 인터럽트 활성화
-    HAL_TIM_PWM_Start_IT(p_htim1, TIM_CHANNEL_1);
+    PulseControl_ApplyDirection(DIR_CCW);
 }
 
-/**
-  * @brief PWM 펄스 카운팅 콜백 (인터럽트 핸들러)
-  * 펄스가 1개 나갈 때마다 호출되어 remaining_steps를 줄입니다.
-  */
-void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim) {
-    // TIM1 인스턴스인지 확인
-    if (htim->Instance == TIM1) {
-        if (remaining_steps > 0) {
-            remaining_steps--; // 남은 펄스 수 차감
-        }
+void pulse_forward(uint32_t count)
+{
+    PulseControl_SendSteps(count, DIR_CW);
+}
 
-        if (remaining_steps == 0) {
-            // 목표 펄스 도달 시 PWM 정지
-            HAL_TIM_PWM_Stop_IT(p_htim1, TIM_CHANNEL_1);
-            is_busy = 0;
-        }
+void pulse_reverse(uint32_t count)
+{
+    PulseControl_SendSteps(count, DIR_CCW);
+}
+
+void PulseControl_SetFrequency(int32_t freq_hz)
+{
+    MotorDirection target_direction = DIR_CCW;
+    uint32_t target_frequency_hz = 0U;
+
+    PulseControl_EnableSharedLineDrivers();
+    requested_frequency_hz = freq_hz;
+    PulseControl_ServiceReverseGuard();
+
+    if (freq_hz == 0) {
+        pending_frequency_hz = 0U;
+        reverse_state = PULSE_REVERSE_IDLE;
+        PulseControl_StopOutputInternal();
+        return;
+    }
+
+    if (freq_hz > 0) {
+        target_direction = DIR_CW;
+        target_frequency_hz = PulseControl_ClampFrequencyHz((uint32_t)freq_hz);
+    } else {
+        target_direction = DIR_CCW;
+        target_frequency_hz = PulseControl_ClampFrequencyHz((uint32_t)(-freq_hz));
+    }
+
+    if (reverse_state != PULSE_REVERSE_IDLE) {
+        pending_direction = target_direction;
+        pending_frequency_hz = target_frequency_hz;
+        return;
+    }
+
+    if (target_direction != current_direction) {
+        PulseControl_BeginReverseGuard(target_direction, target_frequency_hz);
+        return;
+    }
+
+    PulseControl_StartContinuousOutput(target_frequency_hz);
+}
+
+void PulseControl_SendSteps(uint32_t steps, MotorDirection dir)
+{
+    if ((steps == 0U) || (is_busy != 0U)) {
+        return;
+    }
+
+    PulseControl_EnableSharedLineDrivers();
+    requested_frequency_hz = 0;
+    pending_frequency_hz = 0U;
+    reverse_state = PULSE_REVERSE_IDLE;
+    PulseControl_StopOutputInternal();
+
+    is_busy = 1U;
+    remaining_steps = steps;
+    PulseControl_ApplyDirection(dir);
+
+    if (HAL_TIM_PWM_Start_IT(p_htim1, TIM_CHANNEL_1) == HAL_OK) {
+        uint32_t period_counts = __HAL_TIM_GET_AUTORELOAD(p_htim1) + 1U;
+
+        output_active = 1U;
+        applied_frequency_hz = PulseControl_CalculateAppliedFrequencyHz(period_counts);
+    } else {
+        remaining_steps = 0U;
+        is_busy = 0U;
+        applied_frequency_hz = 0U;
     }
 }
 
-/**
-  * @brief 강제 정지
-  * [수정] PID 모드(non-IT)와 Step 모드(IT) 모두 대응:
-  * - Stop_IT → HAL State=READY 후 Stop → State!=BUSY → HAL_ERROR로 상태 꼬이던 문제 해결
-  * - CC 인터럽트를 직접 끄고, HAL_TIM_PWM_Stop 한 번만 호출
-  */
-void PulseControl_Stop(void) {
-    __HAL_TIM_DISABLE_IT(p_htim1, TIM_IT_CC1); // Step 모드 잔여 인터럽트 방지
-    HAL_TIM_PWM_Stop(p_htim1, TIM_CHANNEL_1);  // PWM 출력 정지, HAL State=READY 복구
-    remaining_steps = 0;
-    is_busy = 0;
+void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance != TIM1) {
+        return;
+    }
+
+    if (remaining_steps > 0U) {
+        remaining_steps--;
+    }
+
+    if (remaining_steps == 0U) {
+        PulseControl_StopOutputInternal();
+    }
 }
 
-/**
-  * @brief 상태 확인
-  */
-uint8_t PulseControl_IsBusy(void) {
+void PulseControl_Stop(void)
+{
+    requested_frequency_hz = 0;
+    pending_frequency_hz = 0U;
+    reverse_state = PULSE_REVERSE_IDLE;
+    PulseControl_StopOutputInternal();
+}
+
+uint8_t PulseControl_IsBusy(void)
+{
     return is_busy;
+}
+
+PulseControl_Status_t PulseControl_GetStatus(void)
+{
+    PulseControl_Status_t status;
+
+    status.requested_frequency_hz = requested_frequency_hz;
+    status.applied_frequency_hz = applied_frequency_hz;
+    status.autoreload = __HAL_TIM_GET_AUTORELOAD(p_htim1);
+    status.compare = __HAL_TIM_GET_COMPARE(p_htim1, TIM_CHANNEL_1);
+    status.direction = current_direction;
+    status.output_active = output_active;
+    status.line_driver_enabled = line_drivers_enabled;
+    status.reverse_guard_active = (reverse_state != PULSE_REVERSE_IDLE) ? 1U : 0U;
+    status.busy = is_busy;
+
+    return status;
 }
