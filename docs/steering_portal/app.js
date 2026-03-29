@@ -1,9 +1,13 @@
+const PORTAL_STEERING_GEAR_RATIO = 12.5;
+const PORTAL_ENCODER_COUNT_PER_STEERING_DEG = (PORTAL_STEERING_GEAR_RATIO * 48000) / 360;
+const PORTAL_PULSE_PER_STEERING_DEG = PORTAL_STEERING_GEAR_RATIO / 0.003;
+
 const portalData = {
   kpis: [
-    { label: "Control samples", value: "154", note: "measured from latest PuTTY logs" },
-    { label: "Unique encoder raw", value: "1", note: "all snapshots stayed at 32769" },
-    { label: "Latency batches", value: "220", note: "Sense / Control / Actuate / Comms" },
-    { label: "Max deadline miss", value: "65", note: "interactive logging condition" }
+    { label: "Loop period", value: "1 ms", note: "SysTick based control loop" },
+    { label: "Runtime split", value: "main -> app", note: "boot entry and app supervisor are now separated" },
+    { label: "Encoder mode", value: "unwrap", note: "TIM4 raw delta accumulated into count" },
+    { label: "Drive monitor", value: "St-06 = 0", note: "current bench bottleneck on 2026-03-25" }
   ],
   latency: [
     { name: "Sense", avg: 0.928, p99: 0.961 },
@@ -12,87 +16,87 @@ const portalData = {
     { name: "Comms", avg: 1.995, p99: 1.917 }
   ],
   actualTrace: {
-    labels: ["0", "-1", "-2", "-3", "-4", "-5", "-4", "-3", "-30", "0", "-45", "45", "44", "0"],
-    target: [0, -1, -2, -3, -4, -5, -4, -3, -30, 0, -45, 45, 44, 0],
-    current: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    labels: ["196.67", "196.77", "196.87", "196.97", "197.07", "197.17"],
+    target: [45, 45, 45, 45, 45, 45],
+    current: [-0.604, -0.604, -0.604, -0.604, -0.604, -0.604]
   },
   evaluation: {
-    score: 67,
-    verdict: "조향 제어 bring-up, 계측 체계, 명령 lifecycle 추적은 꽤 좋아졌지만, production-complete steering subsystem으로 보려면 아직 센서 진실성과 readiness closure 공백이 남아 있다.",
+    score: 76,
+    verdict: "runtime 분리와 diagnostic 분리로 구조는 더 좋아졌지만, 현재 bench에서는 드라이브가 command pulse를 카운트하지 않아 motion closure가 남아 있다.",
     summary:
-      "현업 면접관 기준으로 이 프로젝트는 '코드가 있는 데모'가 아니라 '실제 하드웨어를 붙여 계측하고 구조화한 steering controller 프로젝트'라는 점에서 분명 강점이 있다. command lifecycle이 들어가면서 검증 폐쇄성과 설명력이 한 단계 좋아졌지만, 100%를 자율주행 조향 서브컨트롤러 완성형으로 정의하면 현재 상태는 약 67% 수준이 적절하다.",
+      "현업 관점에서 이 프로젝트는 단순한 모터 데모가 아니라 센서, 제어, 액추에이터, 로그, 문서를 한 프레임으로 묶은 steering controller baseline으로 설명할 수 있다. 최근에는 `main.c -> app_runtime.c` 분리와 `position_control_diag.c` 분리까지 들어가면서 구조 설명력과 유지보수성이 좋아졌다. 다만 production-complete steering subsystem 기준으로는 drive-side input closure와 startup safety가 아직 남아 있어 현재 평점은 약 76%가 적절하다.",
     interviewer:
-      "면접에서는 이 프로젝트를 완성품으로 포장하기보다, 센서-제어-액추에이터-로그를 한 프레임으로 묶은 engineering baseline으로 설명하는 편이 더 강하다. 특히 command_id 기반 start/reached/timeout/abort/fault 추적이 생긴 점은 좋다. 다만 closed-loop truth와 fail-safe closure는 아직 마지막 문턱이다.",
+      "면접에서는 '이미 완성된 조향 제어기'보다 '구조와 증거 체계를 갖춘 bring-up baseline'으로 설명하는 편이 더 강하다. 특히 command lifecycle, pulse status, encoder unwrap에 더해 runtime과 diagnostic 레이어를 분리한 점은 설계 감각을 보여준다. 대신 최근 bench에서 `St-06 = 0`이라는 드라이브 모니터 근거를 함께 제시하면서, 마지막 병목이 어디인지 명확히 말하는 것이 신뢰를 높인다.",
     categories: [
       {
         name: "Architecture / Readability",
-        score: 82,
-        detail: "모듈 책임과 문서화가 꽤 잘 보인다. 다만 main.c에 runtime orchestration, bench UI, logging이 몰려 있어 최종 구조로는 더 분리할 필요가 있다."
+        score: 91,
+        detail: "main.c를 얇은 부트 엔트리로 남기고 app_runtime.c와 position_control_diag.c로 책임을 분리하면서 구조가 한 단계 정리됐다. 다음 단계는 app_runtime 안의 bench console과 telemetry를 다시 쪼개는 것이다."
       },
       {
         name: "Observability / Evidence",
-        score: 86,
-        detail: "UART CSV, latency logs, dbg vars, plotting, change log, portal, Doxygen까지 갖춰져 있어 증거 체계는 강한 편이다."
+        score: 90,
+        detail: "CSV, keyboard snapshot, command lifecycle log, latency batch, portal, change log까지 이어져 있어 분석 가능한 증거 체계가 강하다. 특히 diagnostic 계층 분리로 상태 문자열과 debug var 경로가 더 읽기 쉬워졌다."
       },
       {
         name: "Actuator Interface",
-        score: 71,
-        detail: "pulse/direction path와 PF/PR differential 개념은 정리돼 있다. 하지만 100kHz clamp, 500kHz 희망 bench mode, 1MHz 설계 상수가 충돌해 계약 통일이 필요하다."
+        score: 76,
+        detail: "requested/applied Hz, reverse guard, direction polarity macro가 추가되며 actuator 계약이 좋아졌다. 다만 현재 bench에서는 drive `St-06 = 0`이라 입력 인정 closure가 아직 남아 있다."
       },
       {
         name: "Sensor Truth",
-        score: 34,
-        detail: "latest logs에서 encoder raw가 고정이라 closed-loop feedback truth를 증명하지 못한다. production steering에서는 이 항목이 가장 중요하다."
+        score: 58,
+        detail: "encoder unwrap이 들어가고 hand-turn에서 TIM4 count 변화가 확인돼 이전보다 좋아졌다. 하지만 commanded motion 시 authoritative current truth가 아직 완전히 닫히지는 않았다."
       },
       {
         name: "Safety / Startup / Fail-safe",
-        score: 49,
-        detail: "ESTOP, timeout, command fault/abort trace는 좋아졌지만 startup gating, fault latch, recovery contract가 runtime에 완전히 닫혀 있지 않다."
+        score: 54,
+        detail: "ESTOP, timeout, lifecycle trace는 존재한다. 반면 startup auto-enable, latched fault, clear policy, cross-check fault는 아직 미완성이다."
       },
       {
         name: "Verification Closure",
-        score: 66,
-        detail: "CMD_START/REACHED/TIMEOUT/ABORT 로그가 추가되면서 명령 단위 검증은 분명 좋아졌다. 다만 step response, wrong-direction, long-run stability 같은 완료 증거는 아직 부족하다."
+        score: 69,
+        detail: "명령 단위 추적과 pulse/encoder 상태 관찰은 좋아졌지만, 드라이브가 입력 pulse를 실제 motion으로 받아들이는 최종 증거 패키지가 아직 없다."
       }
     ],
     reasons: [
       {
-        title: "설계와 계측의 골격은 분명히 있다",
-        detail: "1ms loop, pulse/direction path, gear ratio 기준, UART/latency logging, plot 생성, 변경 이력 관리까지 이어지는 구조는 이미 프로젝트다운 모습을 갖췄다. 그래서 30~40% 수준의 미완성 프로토타입으로 보이지는 않는다."
+        title: "구조와 증거 체계는 분명히 좋아졌다",
+        detail: "command lifecycle, encoder unwrap, pulse status, latency evidence, portal 동기화에 더해 `main.c -> app_runtime.c` 분리와 `position_control_diag.c` 분리가 들어가면서 현재 코드 상태를 설명하기 쉬워졌다."
       },
       {
-        title: "하지만 steering current truth가 아직 서지 않았다",
-        detail: "현재 로그에서는 target만 변하고 current/encoder가 고정돼 있어, 면접관 입장에서는 '실제로 steering axis가 제어됐는가'라는 핵심 질문에 아직 예라고 답하기 어렵다."
+        title: "현재 병목이 더 구체적으로 드러났다",
+        detail: "예전에는 encoder raw stuck처럼 보였지만, 최근 bench에서는 hand-turn으로 TIM4 count가 바뀌는 사실과 drive `St-06 = 0`이 함께 확인됐다. 즉 문제 위치가 더 좁혀졌다."
       },
       {
-        title: "production steering은 command lifecycle과 fault closure가 핵심이다",
-        detail: "자율주행 조향은 목표값을 받아 움직이는 것만으로는 부족하다. 도달, 미도달, timeout, 반대 방향 진행, sensor stale, estop latch가 상태기와 reason code로 닫혀야 한다. 지금은 lifecycle 1차 구현이 들어갔지만 readiness closure는 아직 남아 있다."
+        title: "startup safety와 fault policy는 아직 설명형 수준이다",
+        detail: "구조 분리는 좋아졌지만 boot-time auto-enable이 남아 있고, fault latch / clear policy / stale sensor taxonomy가 아직 정식 계약으로 닫히지 않았다."
       },
       {
-        title: "startup safety가 아직 설명형 구현에 머물러 있다",
-        detail: "homing과 relay control 파일은 존재하지만 실제 runtime gating으로 완전히 연결되지 않았다. boot-time auto enable은 면접에서 가장 먼저 지적받을 수 있는 리스크다."
+        title: "production steering claim에는 마지막 motion closure가 필요하다",
+        detail: "PE9 pulse와 encoder unwrap만으로는 충분하지 않다. drive가 input pulse를 받아 실제로 움직였다는 반복 가능한 evidence pack이 있어야 100%에 가깝다."
       }
     ],
     to100: [
       {
-        title: "Sensor truth를 authoritative source로 세워야 한다",
-        detail: "TIM4 raw만 보는 수준에서 끝나지 말고 unwrap, accum_count, sign verification, ADC cross-check, stale detection을 넣어야 한다. 이유는 steering 제품에서 현재각이 틀리면 그 위 모든 제어 논리가 무의미해지기 때문이다."
+        title: "Drive input recognition을 bench에서 닫아야 한다",
+        detail: "`St-06`, `St-04`, scope waveform, commanded/applied Hz를 같은 장면으로 묶어 drive가 pulse를 어떻게 인식하는지 증명해야 한다."
       },
       {
-        title: "Move state machine을 완성해야 한다",
-        detail: "IDLE, ARMED, MOVING, REACHED, TIMEOUT, FAULT_LATCH, ESTOP_LATCH를 운영 계약으로 정의해야 한다. 지금은 no-homing baseline에서 command lifecycle이 들어갔고, 다음 단계는 startup gating과 latched fault까지 닫는 것이다."
+        title: "Startup / Arm contract를 만들어야 한다",
+        detail: "INIT -> READY -> ARMED -> RUN -> ESTOP_LATCH 형태로 startup auto-enable을 제거하고, readiness 확인 전에는 enable되지 않도록 바꿔야 한다."
       },
       {
-        title: "Startup / Homing / Recovery를 runtime에 통합해야 한다",
-        detail: "INIT -> HOMING -> READY -> RUN 구조와 clear policy가 있어야 한다. production steering은 전원 인가 직후 움직이지 않고, 센서 기준과 안전 조건이 맞을 때만 arm되는 것이 기본이다."
+        title: "Fault latch와 clear policy를 정식화해야 한다",
+        detail: "ESTOP, tracking limit, timeout, stale sensor, implausible motion을 reason code와 clear 절차까지 포함해 운영 계약으로 정리해야 한다."
       },
       {
         title: "Actuator contract를 하나로 통일해야 한다",
-        detail: "TIM1 capability, clamp, fixed-speed bench mode, direction settle time, stop-before-reverse를 하나의 문서와 코드 계약으로 정리해야 한다. 그래야 하드웨어 인터페이스와 요구사항이 일치한다."
+        detail: "`constants.h`의 1 MHz 상수와 `pulse_control.c`의 100 kHz clamp를 하나의 current runtime contract로 정리하고, 이후 design target은 분리해서 문서화해야 한다."
       },
       {
-        title: "완료 증거 패키지를 만들어야 한다",
-        detail: "step response, reached time, steady-state error, timeout case, estop case, startup inhibit, long-run stability를 로그/플롯/영상으로 남겨야 한다. 100%는 기능이 아니라 반복 가능한 evidence pack까지 포함한 상태다."
+        title: "Async logging으로 strict timing 검증을 분리해야 한다",
+        detail: "blocking UART 대신 DMA + ring buffer를 넣어 motion bring-up과 strict latency measurement를 서로 덜 방해하게 만들어야 한다."
       }
     ]
   },
@@ -100,56 +104,55 @@ const portalData = {
     steps: [
       {
         step: "Step 1",
-        title: "Upper command / 단위 기준부터 맞춘다",
-        summary: "상위 입력은 `steering_deg` 기준으로 들어오고, main runtime에서 `motor_deg`로 변환되어 position controller로 전달된다. 이 단계에서는 기어비와 pulse 환산식이 같은 기준을 쓰는지 먼저 본다.",
+        title: "Upper command와 단위를 먼저 맞춘다",
+        summary: "상위 입력은 `steering_deg`이고, app runtime에서 `motor_deg`로 변환되어 controller로 들어간다. 먼저 gear ratio와 pulse conversion contract가 같은 기준을 쓰는지 본다.",
         vars: [
-          "AutoDrive_Packet_t.steering_angle : float steering_deg",
-          "STEERING_GEAR_RATIO = 12.0",
-          "SteeringDegToMotorDeg() / MotorDegToSteeringDeg()",
+          "AutoDrive_Packet_t.steering_angle",
+          "STEERING_GEAR_RATIO = 12.5",
+          "SteeringDegToMotorDeg()",
           "DEG_PER_PULSE = 0.003 motor_deg"
         ],
-        files: ["ethernet_communication.c", "constants.h", "main.c"],
-        status: "적용됨. 다만 코드 전반에 steering_deg / motor_deg 명칭이 완전히 통일된 상태는 아니다."
+        files: ["ethernet_communication.c", "constants.h", "app_runtime.c"],
+        status: "적용됨. 외부 steering_deg -> 내부 motor_deg 경로는 정리됐지만 naming consistency는 더 다듬을 수 있다."
       },
       {
         step: "Step 2",
         title: "센서 truth를 먼저 확인한다",
-        summary: "제어기보다 먼저 봐야 하는 것은 `enc_raw`, `current_deg`, `ADC angle`이다. 현재 구조상 debug vars와 sensor API는 존재하지만, latest logs에서는 encoder current가 고정이라 sensor truth가 아직 미완료다.",
+        summary: "현재는 `enc_raw`만 보지 않고 `enc_cnt`와 `GetAngleDeg()`를 함께 봐야 한다. 코드에는 unwrap가 이미 들어갔고, 최근 bench에서는 hand-turn 시 TIM4 count 변화도 확인됐다.",
         vars: [
-          "dbg_enc_raw / dbg_pos_mdeg / dbg_err_mdeg",
+          "EncoderReader_GetRawCounter()",
+          "EncoderReader_GetCount()",
           "EncoderReader_GetAngleDeg()",
-          "ADC_Pot_GetAngle()",
-          "DBG_FAULT_POS_LIMIT / DBG_FAULT_TRACKING"
+          "ADC_Pot_GetAngle()"
         ],
-        files: ["encoder_reader.c", "adc_potentiometer.c", "debug_vars.h", "position_control.c"],
-        status: "부분 적용. debug hooks는 있으나 runtime authoritative sensor path는 아직 닫히지 않았다."
+        files: ["encoder_reader.c", "adc_potentiometer.c", "position_control.c"],
+        status: "부분 적용. unwrap는 구현됐지만 commanded motion 기준 sensor truth closure는 아직 남아 있다."
       },
       {
         step: "Step 3",
-        title: "error -> output -> dir -> pulse를 비교한다",
-        summary: "센서값이 믿을 수 있다는 가정 아래, current를 읽고 error를 계산하고 safety check를 통과한 뒤 PID output을 pulse frequency로 내보낸다. 여기서 `dir`과 `pulse`가 error와 같은 방향인지 비교하는 것이 핵심이다.",
+        title: "error -> output -> direction -> drive monitor를 비교한다",
+        summary: "현재는 state.output만 보는 것이 아니라 requested/applied Hz, reverse guard, direction, drive monitor `St-06 / St-04`를 함께 봐야 한다. 그래야 motion bottleneck이 MCU 쪽인지 drive 쪽인지 분리된다.",
         vars: [
-          "state.target_angle / state.current_angle / state.error",
-          "PID_Calculate(error, dt)",
-          "PulseControl_SetFrequency((int32_t)state.output)",
-          "DIR pin + signed pulse_hz"
+          "state.target_angle / current_angle / error",
+          "PulseControl_SetFrequency()",
+          "PulseControl_GetStatus()",
+          "PE9 pulse / PE10 direction / St-06"
         ],
         files: ["position_control.c", "pulse_control.c"],
-        status: "적용됨. no-homing command lifecycle은 반영됐고 actuator contract와 fault latch는 더 보강이 필요하다."
+        status: "적용됨. reverse guard와 pulse status는 들어갔고, 현재 bench 병목은 drive-side command pulse recognition으로 좁혀졌다."
       },
       {
         step: "Step 4",
-        title: "latency / deadline miss / fail-safe trace를 붙인다",
-        summary: "마지막에는 제어 결과만 보지 않고 timing evidence와 fail-safe trace를 함께 본다. 현재는 CSV, latency batch, ESTOP path, command lifecycle event log까지 존재하지만 richer fault taxonomy와 clear policy는 더 필요하다.",
+        title: "lifecycle / timing / fail-safe trace를 붙인다",
+        summary: "마지막에는 command lifecycle, CSV, latency batch를 함께 본다. 현재는 event trace가 좋아졌고 다음 단계는 richer fault taxonomy와 startup clear policy다.",
         vars: [
           "CSV_HEADER / CSV rows",
           "CMD_START / CMD_REACHED / CMD_TIMEOUT / CMD_ABORT / CMD_FAULT",
           "LATENCY_BATCH_BEGIN / LATENCY_STAGE / LATENCY_BATCH_END",
-          "ETHCOMM_RX_TIMEOUT_MS = 300",
           "PositionControl_EmergencyStop()"
         ],
-        files: ["main.c", "latency_profiler.c", "ethernet_communication.h"],
-        status: "적용됨. deterministic evidence의 골격은 갖췄고, 다음 단계는 richer fault taxonomy와 clear policy다."
+        files: ["app_runtime.c", "position_control.c", "position_control_diag.c", "latency_profiler.c"],
+        status: "적용됨. evidence skeleton은 충분히 좋아졌고, 최근에는 runtime/diagnostic 분리로 trace path도 더 읽기 쉬워졌다."
       }
     ],
     phases: [
@@ -161,47 +164,47 @@ const portalData = {
       {
         name: "Unit Convert",
         description: "상위 steering_deg를 내부 motor_deg로 변환한다.",
-        vars: ["STEERING_GEAR_RATIO", "SteeringDegToMotorDeg()", "TargetSteeringDegToMotorDeg()"]
+        vars: ["STEERING_GEAR_RATIO", "SteeringDegToMotorDeg()", "MotorDegToSteeringDeg()"]
       },
       {
         name: "Sense",
-        description: "엔코더 current angle과 debug raw 값을 읽는다. ADC angle은 startup/homing 보조 센서 역할이다.",
-        vars: ["EncoderReader_GetAngleDeg()", "dbg_enc_raw", "dbg_pos_mdeg", "ADC_Pot_GetAngle()"]
+        description: "TIM4 raw와 누적 count를 읽어 current angle을 만든다. ADC는 아직 startup/homing 보조 경로다.",
+        vars: ["enc_raw", "enc_cnt", "EncoderReader_GetAngleDeg()", "ADC_Pot_GetAngle()"]
       },
       {
         name: "Control",
         description: "오차 계산, 안전 체크, PID 계산을 1ms loop 안에서 수행한다.",
-        vars: ["state.error", "PositionControl_CheckSafety()", "PID_Calculate()", "dbg_err_mdeg"]
+        vars: ["state.error", "PositionControl_CheckSafety()", "PID_Calculate()"]
       },
       {
         name: "Actuate",
-        description: "signed output을 pulse_hz와 direction으로 바꿔 line-driver로 전달한다.",
-        vars: ["state.output", "PulseControl_SetFrequency()", "PE9 pulse", "PE10 direction"]
+        description: "signed output을 pulse_hz와 direction으로 바꿔 TIM1과 line-driver로 보낸다.",
+        vars: ["requested_frequency_hz", "applied_frequency_hz", "reverse_guard_active", "PE9", "PE10"]
       },
       {
         name: "Evidence",
-        description: "CSV, latency, snapshot, fault flags로 현재 loop 상태를 외부에 남긴다.",
-        vars: ["CSV rows", "LATENCY_STAGE", "dbg_fault_flags", "[KB][snapshot]"]
+        description: "CSV, lifecycle event, latency batch, keyboard snapshot, debug vars로 현재 상태를 바깥에 남긴다.",
+        vars: ["CSV rows", "CMD_*", "LATENCY_STAGE", "[KB][snapshot]", "dbg_*"]
       }
     ],
     logs: [
       {
         title: "CSV trace 예시",
         snippet:
-          "CSV_HEADER,ms,mode,target_deg,current_deg,error_deg,output,dir,enc,cmd_id,cmd_state,cmd_result\nCSV,1234,1,5.000,0.000,5.000,7400,1,32769,12,1,0",
-        note: "한 줄에서 target, current, error, output, dir, enc와 command lifecycle 상태를 같이 본다. 현업에서는 이 로그로 단위, 부호, 명령 진행 상태가 맞는지 먼저 확인한다."
+          "CSV_HEADER,ms,mode,target_deg,current_deg,error_deg,output,dir,enc_cnt,enc_raw,req_hz,applied_hz,out_active,rev_guard,cmd_id,cmd_state,cmd_result\nCSV,196670,1,45.000,-0.604,45.604,10000,1,-966,31802,10000,10000,1,0,202,1,0",
+        note: "현재 코드 기준 CSV는 command lifecycle과 pulse/encoder 상태를 한 줄에서 같이 보여준다. 현재 bench에서는 이런 줄과 함께 drive `St-06` 값을 같이 봐야 한다."
       },
       {
-        title: "Latency / deadline miss 예시",
+        title: "Latency batch 예시",
         snippet:
-          "LATENCY_BATCH_BEGIN,seq=526,samples=2000,core_hz=180000000,deadline_miss=0\nLATENCY_STAGE,seq=526,name=Sense,count=2000,avg_us=0.928,p99_us=0.961,max_us=0.967\nLATENCY_STAGE,seq=526,name=Control,count=2000,avg_us=2.478,p99_us=2.478,max_us=2.478\nLATENCY_BATCH_END,seq=526",
-        note: "Sense, Control, Actuate, Comms 단계별 timing과 deadline miss를 함께 기록해 deterministic behavior를 설명한다."
+          "LATENCY_BATCH_BEGIN,seq=526,samples=2000,core_hz=180000000,deadline_miss=0\nLATENCY_STAGE,seq=526,name=Sense,count=2000,avg_us=0.928,p99_us=0.961,max_us=0.967\nLATENCY_STAGE,seq=526,name=Control,count=2000,avg_us=2.557,p99_us=2.583,max_us=2.590\nLATENCY_BATCH_END,seq=526",
+        note: "historical latency evidence는 여전히 유효하다. 다만 strict measurement와 interactive UART logging을 같은 실험으로 섞어 해석하면 안 된다."
       },
       {
-        title: "Fail-safe / safety 적용 예시",
+        title: "Lifecycle event 예시",
         snippet:
-          "CMD_START,id=12,src=KEYBOARD,target_deg=5.000,target_motor_deg=60.000,start_ms=12345,start_deg=0.000,start_error_deg=5.000\nCMD_REACHED,id=12,end_ms=12780,settling_ms=435,final_deg=4.940,final_error_deg=0.060\nCMD_ABORT,id=13,reason=ESTOP,end_ms=13020,error_deg=1.200",
-        note: "현재는 timeout ESTOP 경로와 command lifecycle event log가 적용돼 있다. 다만 timeout/fault taxonomy와 clear policy는 더 세분화해야 한다."
+          "CMD_START,id=202,src=KEYBOARD,target_deg=45.000,target_motor_deg=562.500,start_ms=196650,start_deg=-0.604,start_error_deg=45.604\nCMD_TIMEOUT,id=202,end_ms=199651,elapsed_ms=3001,error_deg=45.604",
+        note: "현재 lifecycle event는 충분히 명확하다. 다음 단계는 timeout / fault / stale sensor를 더 세분화해 drive-side 문제와 sensor-side 문제를 reason code로 구분하는 것이다."
       }
     ]
   },
@@ -210,15 +213,15 @@ const portalData = {
       id: "REQ-P0-001",
       priority: "P0",
       owner: "Sensor / C",
-      title: "Encoder unwrap와 accum_count를 도입해 ±45 deg steering full range를 설명 가능하게 만든다.",
-      detail: "16-bit TIM4 raw만으로는 full steering range를 닫을 수 없으므로 raw_count, delta_count, accum_count, motor_deg, steering_deg를 분리해 제공해야 한다."
+      title: "unwrap count 장기 검증과 stale sensor 진단을 추가한다.",
+      detail: "unwrap 자체는 구현됐으므로, 이제는 long-run wrap 구간과 commanded motion 대비 stale sensor를 판별하는 진단을 넣어야 한다."
     },
     {
       id: "REQ-P0-002",
       priority: "P0",
-      owner: "Control / A",
-      title: "command lifecycle 다음 단계로 fault latch / clear policy를 닫는다.",
-      detail: "no-homing baseline에서 target/reached/timeout/abort/fault event는 추가됐다. 다음 단계는 latched fault, startup readiness, wrong-direction/stale sensor abort 정책까지 운영 계약으로 닫는 것이다."
+      owner: "Actuator / D",
+      title: "drive `St-06 / St-04` 기준 command pulse recognition을 bench에서 닫는다.",
+      detail: "scope waveform, requested/applied Hz, drive monitor를 한 세트로 비교해 pulse가 왜 drive 내부에서 0으로 보이는지 원인을 좁혀야 한다."
     },
     {
       id: "REQ-P0-003",
@@ -230,188 +233,288 @@ const portalData = {
     {
       id: "REQ-P0-004",
       priority: "P0",
-      owner: "Actuator / D",
-      title: "pulse contract를 하나로 통일한다.",
-      detail: "1 MHz constant, 100 kHz clamp, 500 kHz desired bench mode가 서로 충돌하므로 current firmware capability와 target design capability를 분리해서 계약해야 한다."
+      owner: "Control / A",
+      title: "fault latch / clear policy를 command lifecycle과 연결한다.",
+      detail: "timeout, estop, tracking fault, stale sensor, startup inhibit를 reason code와 clear 절차까지 포함해 운영 계약으로 닫아야 한다."
     },
     {
       id: "REQ-P1-001",
       priority: "P1",
-      owner: "Integration / E",
-      title: "upper command, mode, ESTOP, timeout을 하나의 system contract로 묶는다.",
-      detail: "UDP packet, keyboard test, comm timeout, recovery clear 조건을 같은 state model에서 다뤄야 한다."
+      owner: "Actuator / D",
+      title: "pulse contract를 문서와 코드에서 하나로 통일한다.",
+      detail: "`constants.h`의 1 MHz와 `pulse_control.c`의 100 kHz clamp를 current runtime contract와 future design target으로 분리해 정리해야 한다."
     },
     {
       id: "REQ-P1-002",
       priority: "P1",
-      owner: "Validation / F",
-      title: "CSV, latency, plot, change log, 영상, Doxygen source를 하나의 evidence pack으로 자동 연결한다.",
-      detail: "포트폴리오와 인수기준 설명이 가능하도록 측정 결과와 요구사항 ID를 함께 남기는 체계가 필요하다."
+      owner: "Sensor / C",
+      title: "encoder-ADC cross-check와 implausible motion 진단을 넣는다.",
+      detail: "commanded direction과 encoder delta 부호가 일정 시간 이상 맞지 않으면 sensor 또는 actuator fault 후보로 남겨야 한다."
     },
     {
       id: "REQ-P1-003",
       priority: "P1",
-      owner: "Sensor / C",
-      title: "encoder-ADC cross-check와 implausible motion 진단을 넣는다.",
-      detail: "commanded direction과 encoder delta 부호가 일정 시간 이상 안 맞으면 sensor/actuator fault 후보로 판단해야 한다."
+      owner: "Integration / E",
+      title: "keyboard bench, UDP mode, timeout, ESTOP를 하나의 system contract로 묶는다.",
+      detail: "현재는 keyboard mode 기본값과 UDP mode가 공존한다. mode transition과 recovery 조건을 같은 상태 모델로 정리해야 한다."
     },
     {
       id: "REQ-P1-004",
       priority: "P1",
-      owner: "Control / A",
-      title: "fault taxonomy를 정식 코드 체계로 만든다.",
-      detail: "sensor stale, tracking error, over-limit, timeout, estop, startup inhibit를 reason code와 clear 조건으로 함께 관리해야 한다."
+      owner: "Validation / F",
+      title: "CSV, latency, drive monitor, change log를 evidence pack으로 자동 연결한다.",
+      detail: "실험 baseline, plots, raw logs, command lifecycle, drive monitor 값을 같은 태그로 묶으면 인수/포트폴리오 설명력이 높아진다."
     },
     {
       id: "REQ-P2-001",
       priority: "P2",
       owner: "Actuator / D",
-      title: "direction reversal setup/hold와 residual pulse count를 scope evidence로 남긴다.",
-      detail: "stop-before-reverse, guard time, actual waveform 검증이 있어야 driver interface를 설명할 수 있다."
+      title: "direction reversal setup/hold를 scope evidence로 남긴다.",
+      detail: "1 ms reverse guard가 실제 line-driver와 드라이브 입력에서 어떻게 보이는지 wave capture로 남겨야 한다."
     },
     {
       id: "REQ-P2-002",
       priority: "P2",
       owner: "Validation / F",
-      title: "MClab 제출용 PDF와 측정 리포트를 자동 생성 가능한 형태로 정리한다.",
-      detail: "사이트, PNG plot, raw log, 핵심 표를 같은 baseline 태그로 묶으면 제출 품질이 높아진다."
+      title: "UART logging을 async path로 분리한다.",
+      detail: "DMA + ring buffer로 바꾸어 motion bring-up과 strict timing 측정을 서로 덜 방해하게 해야 한다."
     }
   ],
   teams: [
     {
       owner: "Team A",
       title: "Motion Control & Fault Manager",
-      scope: "position_control.c, control contract, reached-state, fault latch",
-      deliverable: "target/reached/timeout/fault state machine, actual dt/saturation diagnostics",
-      evidence: "step response log, state transition trace, fault injection log"
+      scope: "position_control.c, lifecycle, timeout, fault reason",
+      deliverable: "fault latch, clear policy, wrong-direction / stale sensor diagnostics",
+      evidence: "state transition log, timeout case, fault injection trace"
     },
     {
       owner: "Team B",
       title: "Startup / Homing / Relay Safety",
-      scope: "homing.c, relay_control.c, startup and recovery sequence",
-      deliverable: "INIT->HOMING->READY->RUN state machine, latched ESTOP clear procedure",
-      evidence: "startup GPIO sequence, homing success/failure log, recovery checklist"
+      scope: "homing.c, relay_control.c, startup gating",
+      deliverable: "INIT -> READY -> ARMED -> RUN contract and recovery sequence",
+      evidence: "startup GPIO trace, ready/arm log, homing fallback flow"
     },
     {
       owner: "Team C",
       title: "Sensor Integrity",
-      scope: "encoder_reader.c, adc_potentiometer.c, unit conversion and health",
-      deliverable: "unwrap, accum_count, ADC validity, cross-check, sign verification",
-      evidence: "long-run encoder log, ADC raw/angle CSV, mismatch detection trace"
+      scope: "encoder_reader.c, adc_potentiometer.c, count/angle health",
+      deliverable: "unwrap validation, stale detection, encoder-ADC cross-check",
+      evidence: "long-run encoder log, mismatch detection trace, sign verification"
     },
     {
       owner: "Team D",
       title: "Pulse / Direction / Driver Timing",
-      scope: "pulse_control.c, TIM1 frequency contract, PF/PR path",
-      deliverable: "applied_hz contract, fixed-speed move mode, stop-before-reverse policy",
-      evidence: "scope capture, commanded vs measured frequency table, residual pulse count"
+      scope: "pulse_control.c, TIM1 contract, PF/PR path, drive monitor",
+      deliverable: "requested/applied Hz contract, `St-06 / St-04` closure, reverse-guard wave proof",
+      evidence: "scope capture, drive monitor table, commanded vs applied frequency report"
     },
     {
       owner: "Team E",
       title: "Communication & System Integration",
-      scope: "ethernet_communication.c, main.c mode transitions, timeout behavior",
-      deliverable: "UDP/keyboard/system mode contract, command validation, recovery gating",
+      scope: "ethernet_communication.c, app_runtime.c mode transitions, timeout behavior",
+      deliverable: "keyboard/UDP/system mode contract and recovery gating",
       evidence: "mode transition log, timeout fail-safe proof, packet-to-target trace"
     },
     {
       owner: "Team F",
       title: "Verification & Tooling",
-      scope: "latency_profiler.c, debug_vars, plotting scripts, documentation portal",
-      deliverable: "evidence automation, plot generation, portal maintenance, measurement pack",
-      evidence: "latency report, PNG plots, Doxygen portal, submission-ready artifact set"
+      scope: "latency_profiler.c, position_control_diag.c, debug_vars, plotting scripts, documentation portal",
+      deliverable: "evidence automation, async logging support, portal maintenance",
+      evidence: "latency report, PNG plots, portal snapshot, submission-ready artifact set"
     }
   ],
   modules: [
     {
       id: "main",
       title: "main.c",
-      subtitle: "System init, scheduler, keyboard test, CSV/latency logging",
+      subtitle: "CubeMX boot wrapper and top-level entrypoint",
       owner: "Integration / Runtime",
-      inputs: ["UDP packets", "keyboard UART", "interrupt_flag", "watchdog tick"],
-      outputs: ["PositionControl_SetTargetWithSource()", "Relay_ServoOn()", "Periodic CSV", "LATENCY_STAGE"],
-      risks: ["boot-time auto enable", "multiple responsibilities in one file"],
+      inputs: ["HAL reset", "SystemClock_Config()", "MX_* peripheral initialization completion"],
+      outputs: ["AppRuntime_Init()", "AppRuntime_RunIteration()", "__io_putchar() UART bridge"],
+      risks: ["blocking __io_putchar()", "CubeMX merge points still need discipline"],
       files: ["../../Core/Src/main.c", "../../Core/Inc/main.h"],
       doxygen: "../doxygen/html/main_8c_source.html",
-      snippet: "HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);\\nRelay_Init();\\nPulseControl_Init();\\nEncoderReader_Init();\\nPositionControl_Init();\\n...\\nEncoderReader_Reset();\\nPositionControl_SetTargetWithSource(TargetSteeringDegToMotorDeg(0.0f), CMD_SRC_LOCALTEST);\\nPositionControl_Enable();",
-      notes: "main.c는 initialization, mode handling, bench UI, logging까지 맡고 있어 runtime orchestration의 중심이지만, state machine 관점에서는 책임이 과하다."
+      snippet: "MX_GPIO_Init();\\nMX_USART3_UART_Init();\\nMX_TIM1_Init();\\nMX_TIM4_Init();\\nMX_LWIP_Init();\\nAppRuntime_Init();\\nwhile (1) {\\n    AppRuntime_RunIteration();\\n}",
+      notes: "최근 리팩터링 이후 main.c는 CubeMX 재생성 경계와 앱 진입점 역할만 남겼다. 실제 startup, super-loop, bench telemetry는 app_runtime.c가 맡는다."
+    },
+    {
+      id: "runtime",
+      title: "app_runtime.c",
+      subtitle: "Application startup, super-loop services, bench console, CSV and DIAG",
+      owner: "Integration / Runtime",
+      inputs: ["interrupt_flag", "keyboard UART bytes", "EthComm mode/data", "PositionControl/Pulse/Encoder state"],
+      outputs: ["PositionControl_Enable()/Update()", "PositionControl_SetTargetWithSource()", "CSV/DIAG logs", "IWDG refresh"],
+      risks: ["startup auto-enable still present", "bench console and telemetry are still combined", "blocking UART logging"],
+      files: ["../../Core/Src/app_runtime.c", "../../Core/Inc/app_runtime.h"],
+      doxygen: null,
+      snippet: "void AppRuntime_RunIteration(void) {\\n    MX_LWIP_Process();\\n    AppRuntime_KeyboardProcessInput();\\n    AppRuntime_ServiceUdpComms();\\n    if (interrupt_flag != 0U) {\\n        interrupt_flag = 0U;\\n        AppRuntime_ServiceFastTick();\\n    }\\n    AppRuntime_ServicePeriodicCsv();\\n    HAL_IWDG_Refresh(&hiwdg);\\n}",
+      notes: "현재 앱 운영의 중심 파일이다. startup 시퀀스, keyboard bench, UDP mode transition, fast tick, telemetry가 한데 모여 있어 이후 `bench_console`과 `telemetry`로 더 쪼갤 후보이기도 하다."
     },
     {
       id: "position",
       title: "position_control.c",
-      subtitle: "PID, safety check, debug vars, emergency stop",
+      subtitle: "PID, safety check, lifecycle, emergency stop",
       owner: "Control / A",
       inputs: ["target_angle[motor_deg]", "current_angle from encoder", "dt from HAL_GetTick"],
       outputs: ["state.output -> PulseControl_SetFrequency()", "fault -> Relay_Emergency()"],
-      risks: ["fault latch 부족", "boot-time auto-enable 연계 미완성", "HAL_GetTick precision limitation"],
+      risks: ["fault latch 부족", "startup contract 미완성", "HAL_GetTick 기반 dt 정밀도 한계"],
       files: ["../../Core/Src/position_control.c", "../../Core/Inc/position_control.h"],
       doxygen: "../doxygen/html/position__control_8c_source.html",
       snippet: "state.current_angle = EncoderReader_GetAngleDeg();\\nstate.error = state.target_angle - state.current_angle;\\nif (!PositionControl_CheckSafety()) {\\n    PositionControl_CommandFinish(CMD_FAULTED, fault_result, HAL_GetTick());\\n    PositionControl_EmergencyStop();\\n    return;\\n}\\nstate.output = PID_Calculate(state.error, dt);\\nPulseControl_SetFrequency((int32_t)state.output);",
-      notes: "현재 구조는 error 기반 PID output, command_id, start/reached/timeout/abort/fault event까지 연결됐다. 다음 단계는 fault latch, stale sensor, startup readiness와의 closure다."
+      notes: "현재 lifecycle trace는 충분히 좋아졌다. 다음 핵심은 stale sensor와 startup gating을 같은 fault policy로 묶는 것이다."
+    },
+    {
+      id: "positiondiag",
+      title: "position_control_diag.c",
+      subtitle: "Command string helpers, debug var mirroring, state summary",
+      owner: "Validation / F",
+      inputs: ["PositionControl_State_t", "CommandLifecycle_t", "control_enabled/mode/fault_flag"],
+      outputs: ["dbg_* globals", "bench summary printf", "readable lifecycle/error strings"],
+      risks: ["stats/callback APIs are still placeholder stubs", "printf path is still blocking"],
+      files: ["../../Core/Src/position_control_diag.c", "../../Core/Inc/position_control_diag.h"],
+      doxygen: null,
+      snippet: "void PositionControlDiag_UpdateDebugVars(const PositionControl_State_t* state, ...) {\\n    dbg_enc_raw = (int32_t)EncoderReader_GetRawCounter();\\n    dbg_pos_mdeg = PositionControlDiag_DegToMilliDeg(MotorDegToSteeringDeg(state->current_angle));\\n    dbg_target_mdeg = PositionControlDiag_DegToMilliDeg(MotorDegToSteeringDeg(state->target_angle));\\n    dbg_fault_flags = PositionControlDiag_BuildDebugFaultFlags(...);\\n}",
+      notes: "진단 책임을 따로 뺀 덕분에 position_control.c 핫패스가 더 얇아졌다. 현재는 문자열/출력 계층이고, 앞으로는 async telemetry adapter 후보가 될 수 있다."
     },
     {
       id: "encoder",
       title: "encoder_reader.c",
-      subtitle: "TIM4 16-bit encoder raw -> angle conversion",
+      subtitle: "TIM4 raw counter -> unwrap count -> motor angle",
       owner: "Sensor / C",
       inputs: ["TIM4 raw counter"],
-      outputs: ["current_angle[motor_deg]", "raw_count"],
-      risks: ["unwrap missing", "latest log 기준 raw stuck"],
+      outputs: ["current_angle[motor_deg]", "enc_cnt", "enc_raw"],
+      risks: ["long-run wrap validation 미완료", "raw와 count 의미 혼동 가능", "commanded motion proof 미완료"],
       files: ["../../Core/Src/encoder_reader.c", "../../Core/Inc/encoder_reader.h"],
       doxygen: "../doxygen/html/encoder__reader_8c_source.html",
-      snippet: "uint16_t raw = __HAL_TIM_GET_COUNTER(&ENCODER_TIMER);\\nencoder_count = (int32_t)raw - 32768;\\nint32_t adjusted_count = encoder_count - encoder_offset;\\nreturn (float)adjusted_count * DEG_PER_COUNT;",
-      notes: "full steering range를 설명하려면 raw_count만이 아니라 accum_count와 steering/motor 축 변환을 함께 보여줘야 한다."
+      snippet: "uint16_t raw = (uint16_t)__HAL_TIM_GET_COUNTER(&ENCODER_TIMER);\\nint16_t delta = (int16_t)(raw - encoder_last_raw);\\nencoder_count += (int32_t)delta;\\nencoder_last_raw = raw;\\nreturn encoder_count - encoder_offset;",
+      notes: "이제 encoder는 centered raw 직접 해석이 아니라 unwrap count를 사용한다. 현재 과제는 commanded motion 기준의 sensor truth closure다."
     },
     {
       id: "pulse",
       title: "pulse_control.c",
-      subtitle: "PE9 pulse, PE10 direction, PF/PR line-driver path",
+      subtitle: "PE9 pulse, PE10 direction, reverse guard, status API",
       owner: "Actuator / D",
       inputs: ["signed pulse_hz", "step count", "direction enum"],
-      outputs: ["TIM1 PWM", "GPIO direction", "step busy state"],
-      risks: ["current clamp 100kHz", "hard-coded timer clock", "reverse timing policy 없음"],
+      outputs: ["TIM1 PWM", "GPIO direction", "applied Hz status", "reverse_guard_active"],
+      risks: ["100 kHz current clamp", "drive `St-06 = 0` bench issue", "logging load와 bench 상호작용"],
       files: ["../../Core/Src/pulse_control.c", "../../Core/Inc/pulse_control.h"],
       doxygen: "../doxygen/html/pulse__control_8c_source.html",
-      snippet: "if (freq_hz > 0) {\\n    PulseControl_ApplyDirection(DIR_CW);\\n} else {\\n    PulseControl_ApplyDirection(DIR_CCW);\\n    freq_hz = -freq_hz;\\n}\\nif (freq_hz > 100000) freq_hz = 100000;\\nif (freq_hz < 10) freq_hz = 10;",
-      notes: "하드웨어는 pulse/direction line driver가 분리돼 있으므로, 펌웨어도 frequency contract와 direction timing을 더 명시적으로 관리해야 한다."
+      snippet: "requested_frequency_hz = freq_hz;\\nPulseControl_ServiceReverseGuard();\\nif (target_direction != current_direction) {\\n    PulseControl_BeginReverseGuard(target_direction, target_frequency_hz);\\n    return;\\n}\\nPulseControl_StartContinuousOutput(target_frequency_hz);",
+      notes: "최근 변경으로 requested/applied Hz와 reverse guard를 볼 수 있게 됐다. 이제 남은 핵심은 drive-side input recognition을 bench에서 닫는 것이다."
     },
     {
       id: "comms",
       title: "ethernet_communication.c",
-      subtitle: "UDP parsing, status reporting, steering unit conversion",
+      subtitle: "UDP parsing, mode handling, steering unit conversion",
       owner: "Integration / E",
       inputs: ["UDP command text / packets"],
       outputs: ["SteerMode_t", "AutoDrive_Packet_t", "status text"],
-      risks: ["binary CRC contract 미완료", "state machine 통합 필요"],
+      risks: ["binary CRC contract 미완료", "keyboard default와 UDP mode 통합 필요"],
       files: ["../../Core/Src/ethernet_communication.c", "../../Core/Inc/ethernet_communication.h"],
       doxygen: "../doxygen/html/ethernet__communication_8c_source.html",
-      snippet: "target_motor_deg = SteeringDegToMotorDeg(cmd->f32_value);\\nif (PositionControl_SetTargetWithSource(target_motor_deg, CMD_SRC_SERVICE) != 0) {\\n    return EthComm_SendString(\\\"ERR TARGET\\\\r\\\\n\\\");\\n}\\n...\\nfloat cur = MotorDegToSteeringDeg(PositionControl_GetCurrentAngle());",
-      notes: "외부 명령은 steering_deg, 내부는 motor_deg로 바꾸는 경로가 이미 일부 들어가 있다. 이 계약을 state machine 전체와 연결하는 것이 다음 단계다."
+      snippet: "if (g_current_mode == STEER_MODE_MANUAL) {\\n    g_latest_pkt.steering_angle = joy_to_deg(joy_y);\\n    g_new_data = true;\\n} else if (g_current_mode == STEER_MODE_ESTOP) {\\n    g_emergency_request = true;\\n}\\n...\\nif (pc_speed == SPEED_ESTOP_SENTINEL) {\\n    g_emergency_request = true;\\n}",
+      notes: "외부 명령 계약은 steering_deg 기준으로 꽤 정리됐다. 현재 app_runtime.c가 이 파일의 mode/data를 소비해 runtime 상태전이를 수행한다."
     },
     {
       id: "homing",
-      title: "homing.c + relay_control.c",
-      subtitle: "Startup safety skeleton",
+      title: "relay_control.c + homing.c",
+      subtitle: "Power/safety outputs and startup zero-reference skeleton",
       owner: "Safety / B",
-      inputs: ["ADC angle", "operator reset or startup event"],
-      outputs: ["encoder offset", "relay GPIO action"],
-      risks: ["main runtime에서 실제 통합 안 됨", "failure path가 약함"],
+      inputs: ["ADC angle", "startup event", "operator reset"],
+      outputs: ["encoder offset", "SVON/EMG relay action"],
+      risks: ["main runtime에 실제 gating 미통합", "failure clear path 약함"],
       files: ["../../Core/Src/homing.c", "../../Core/Src/relay_control.c"],
       doxygen: "../doxygen/html/homing_8c_source.html",
       snippet: "float pot_angle = ADC_Pot_GetAngle();\\nEncoderReader_Reset();\\nint32_t offset_count = (int32_t)(pot_angle * ENCODER_COUNT_PER_REV / FULL_ROTATION_DEG);\\nEncoderReader_SetOffset(offset_count);\\nhoming_status = HOMING_STATUS_COMPLETE;",
-      notes: "현업 기준에서는 startup safety를 설명하는 핵심인데, 현재는 개념 구현에 가까워 실제 runtime gating까지는 연결되지 않았다."
+      notes: "현재는 startup safety의 skeleton이다. 실제 운영 계약으로 보려면 ready/arm gating과 recovery까지 묶어야 한다."
     },
     {
       id: "latency",
       title: "latency_profiler.c + debug_vars.h",
       subtitle: "Measured evidence and debug observability",
       owner: "Validation / F",
-      inputs: ["DWT cycle counter", "debug globals", "1ms deadline tick"],
+      inputs: ["DWT cycle counter", "debug globals", "1 ms deadline tick"],
       outputs: ["LATENCY_STAGE logs", "dbg_* watch variables", "plots"],
-      risks: ["strict measurement session과 interactive session 구분 필요"],
+      risks: ["strict measurement session과 interactive session 분리 필요"],
       files: ["../../Core/Src/latency_profiler.c", "../../Core/Inc/debug_vars.h"],
       doxygen: "../doxygen/html/latency__profiler_8c_source.html",
       snippet: "dt = DWT->CYCCNT - buf->start_cycle;\\nbuf->samples[buf->sample_count] = dt;\\n...\\nout_stats->avg_us = cycles_to_us(avg_cycles);\\nout_stats->p99_us = cycles_to_us(p99_cycles);\\nout_stats->max_us = cycles_to_us(buf->max_cycles);",
-      notes: "이 프로젝트의 강점은 코드 자체뿐 아니라 지연 시간과 debug variables를 evidence로 남긴다는 점이다."
+      notes: "이 프로젝트의 강점은 코드뿐 아니라 evidence pipeline이다. 현재는 motion bring-up과 timing measurement 조건을 분리해 설명하는 것이 중요하다."
+    }
+  ],
+  runtimeAtlas: [
+    {
+      title: "main.c",
+      file: "Core/Src/main.c",
+      role: "CubeMX가 관리하는 초기화 코드와 앱 런타임 호출 경계를 유지한다.",
+      receives: ["HAL reset + clock init", "MX_GPIO/MX_TIM/MX_LWIP 초기화 완료"],
+      sends: ["AppRuntime_Init()", "AppRuntime_RunIteration()", "USART3 기반 __io_putchar()"],
+      functions: ["main()", "SystemClock_Config()", "__io_putchar()"],
+      variables: ["사용자 static state 거의 없음", "UART 리다이렉션은 huart3에 의존"]
+    },
+    {
+      title: "app_runtime.c",
+      file: "Core/Src/app_runtime.c",
+      role: "실제 애플리케이션 startup과 super-loop를 운영하는 통합 supervisor다.",
+      receives: ["interrupt_flag", "keyboard UART bytes", "EthComm latest packet / mode", "PositionControl/Pulse/Encoder 상태"],
+      sends: ["PositionControl_Update()", "PositionControl_SetTargetWithSource()", "CSV/DIAG/UART 로그", "IWDG refresh"],
+      functions: ["AppRuntime_Init()", "AppRuntime_RunIteration()", "AppRuntime_ServiceFastTick()", "AppRuntime_ServiceUdpComms()"],
+      variables: ["g_debug_print_divider", "g_latency_report_seq", "g_keyboard_target_steer_deg", "g_periodic_csv_enabled"]
+    },
+    {
+      title: "ethernet_communication.c",
+      file: "Core/Src/ethernet_communication.c",
+      role: "UDP 패킷을 runtime이 소비할 수 있는 mode/data 상태로 변환한다.",
+      receives: ["LwIP UDP payload", "manual joy_y / PC steer packet", "service text command"],
+      sends: ["AutoDrive_Packet_t", "SteerMode_t", "emergency request flag", "last_rx_tick"],
+      functions: ["EthComm_Init()", "EthComm_UDP_Init()", "EthComm_HasNewData()", "EthComm_GetLatestData()"],
+      variables: ["g_latest_pkt", "g_current_mode", "g_emergency_request", "g_last_rx_tick"]
+    },
+    {
+      title: "position_control.c",
+      file: "Core/Src/position_control.c",
+      role: "PID 계산, lifecycle 상태전이, safety check, ESTOP를 수행하는 제어 코어다.",
+      receives: ["target_angle[motor_deg]", "EncoderReader current angle", "HAL_GetTick() based dt"],
+      sends: ["PulseControl_SetFrequency()", "Relay_Emergency()", "CommandLifecycle_t update"],
+      functions: ["PositionControl_Update()", "PositionControl_SetTargetWithSource()", "PositionControl_Enable()", "PositionControl_EmergencyStop()"],
+      variables: ["state", "command_lifecycle", "pending_command_source", "fault_flag"]
+    },
+    {
+      title: "position_control_diag.c",
+      file: "Core/Src/position_control_diag.c",
+      role: "제어 코어에서 분리된 diagnostic helper 레이어다.",
+      receives: ["PositionControl_State_t snapshot", "command lifecycle", "control mode / fault info"],
+      sends: ["dbg_* globals", "상태 요약 printf", "readable enum labels"],
+      functions: ["PositionControlDiag_UpdateDebugVars()", "PositionControlDiag_PrintStateSummary()", "PositionControlDiag_CommandStateString()"],
+      variables: ["diag_level", "stats", "dbg_enc_raw", "dbg_fault_flags"]
+    },
+    {
+      title: "encoder_reader.c",
+      file: "Core/Src/encoder_reader.c",
+      role: "TIM4 raw counter를 unwrap count와 motor angle로 바꿔 센서 truth를 제공한다.",
+      receives: ["TIM4->CNT raw counter", "offset_count"],
+      sends: ["current motor_deg", "enc_cnt", "enc_raw"],
+      functions: ["EncoderReader_Init()", "EncoderReader_GetAngleDeg()", "EncoderReader_GetCount()", "EncoderReader_SetOffset()"],
+      variables: ["encoder_last_raw", "encoder_count", "encoder_offset", "encoder_initialized"]
+    },
+    {
+      title: "pulse_control.c",
+      file: "Core/Src/pulse_control.c",
+      role: "signed pulse_hz를 TIM1 PWM과 direction GPIO로 바꾸는 액추에이터 인터페이스다.",
+      receives: ["signed pulse_hz", "step count", "target direction"],
+      sends: ["PE9 pulse", "PE10 direction", "requested/applied Hz status", "reverse guard state"],
+      functions: ["PulseControl_SetFrequency()", "PulseControl_SendSteps()", "PulseControl_Stop()", "PulseControl_GetStatus()"],
+      variables: ["requested_frequency_hz", "applied_frequency_hz", "pending_direction", "pending_frequency_hz", "remaining_steps"]
+    },
+    {
+      title: "relay_control.c + homing.c",
+      file: "Core/Src/relay_control.c / Core/Src/homing.c",
+      role: "SVON/EMG 릴레이 출력과 startup zero-reference skeleton을 담당한다.",
+      receives: ["operator reset", "ADC absolute angle", "startup event"],
+      sends: ["Relay_ServoOn/Off()", "Relay_Emergency()", "encoder offset"],
+      functions: ["Relay_Init()", "Relay_ServoOn()", "Relay_Emergency()", "Homing_Start()"],
+      variables: ["homing_status", "offset_count", "GPIO relay state"]
     }
   ]
 };
@@ -696,6 +799,46 @@ function renderTeams() {
   });
 }
 
+function renderRuntimeAtlas() {
+  const flowHost = document.getElementById("runtime-flow");
+  const gridHost = document.getElementById("runtime-atlas-grid");
+
+  portalData.runtimeAtlas.forEach((entry) => {
+    const stage = makeEl("article", "runtime-stage");
+    stage.innerHTML = `
+      <span class="runtime-file-tag">${entry.title}</span>
+      <h3>${entry.role}</h3>
+      <p class="caption">${entry.file}</p>
+    `;
+    flowHost.append(stage);
+
+    const card = makeEl("article", "runtime-atlas-card");
+    card.innerHTML = `
+      <span class="runtime-file-tag">${entry.title}</span>
+      <p class="runtime-role">${entry.role}</p>
+      <div class="runtime-io-grid">
+        <div class="runtime-io-box">
+          <h4>받는 정보</h4>
+          <ul class="plain-list">${entry.receives.map((item) => `<li>${item}</li>`).join("")}</ul>
+        </div>
+        <div class="runtime-io-box">
+          <h4>보내는 정보</h4>
+          <ul class="plain-list">${entry.sends.map((item) => `<li>${item}</li>`).join("")}</ul>
+        </div>
+      </div>
+      <div class="runtime-list-block">
+        <h4>핵심 함수</h4>
+        <div class="badge-row">${entry.functions.map((item) => `<span class="code-badge">${item}</span>`).join("")}</div>
+      </div>
+      <div class="runtime-list-block">
+        <h4>핵심 변수 / 상태</h4>
+        <div class="badge-row">${entry.variables.map((item) => `<span class="code-badge">${item}</span>`).join("")}</div>
+      </div>
+    `;
+    gridHost.append(card);
+  });
+}
+
 function selectModule(moduleId) {
   const module = portalData.modules.find((entry) => entry.id === moduleId);
   const host = document.getElementById("module-detail");
@@ -723,7 +866,7 @@ function selectModule(moduleId) {
     </div>
     <pre class="code-snippet">${module.snippet}</pre>
     <div class="module-links">
-      <a href="${module.doxygen}">Doxygen source</a>
+      ${module.doxygen ? `<a href="${module.doxygen}">Doxygen source</a>` : ""}
       ${module.files.map((file) => `<a href="${file}">${file.split("/").slice(-2).join("/")}</a>`).join("")}
     </div>
   `;
@@ -776,9 +919,9 @@ function setupSimulation() {
   const simState = {
     targetDeg: Number(targetSlider.value),
     freqHz: Number(freqSlider.value),
-    targetMotorDeg: Number(targetSlider.value) * 12,
-    pulseCount: Math.round(Math.abs(Number(targetSlider.value)) * 4000),
-    encoderCount: Math.round(Math.abs(Number(targetSlider.value)) * 1600),
+    targetMotorDeg: Number(targetSlider.value) * PORTAL_STEERING_GEAR_RATIO,
+    pulseCount: Math.round(Math.abs(Number(targetSlider.value)) * PORTAL_PULSE_PER_STEERING_DEG),
+    encoderCount: Math.round(Math.abs(Number(targetSlider.value)) * PORTAL_ENCODER_COUNT_PER_STEERING_DEG),
     timeSec: 0,
     durationMs: 0,
     startTs: 0
@@ -798,9 +941,9 @@ function setupSimulation() {
   const refreshMetrics = () => {
     const target = Number(targetSlider.value);
     const freq = Number(freqSlider.value);
-    const motorDeg = target * 12;
-    const encoderCount = Math.round(Math.abs(target) * 1600);
-    const pulseCount = Math.round(Math.abs(target) * 4000);
+    const motorDeg = target * PORTAL_STEERING_GEAR_RATIO;
+    const encoderCount = Math.round(Math.abs(target) * PORTAL_ENCODER_COUNT_PER_STEERING_DEG);
+    const pulseCount = Math.round(Math.abs(target) * PORTAL_PULSE_PER_STEERING_DEG);
     const timeSec = pulseCount / Math.max(freq, 1);
     const motorRev = motorDeg / 360;
 
@@ -822,10 +965,10 @@ function setupSimulation() {
     setDialMarker(motorTargetMarker, motorDeg);
     buildIdealTrace(target, timeSec);
 
-    if (freq > 100000) {
-      freqStatus.textContent = "현재 코드 기준으로는 100000 Hz clamp가 있으므로 이 값은 설명용 설계 목표다. 포털 시뮬레이션은 500000 Hz까지 재생하지만, 실제 firmware는 TIM1 / pulse contract 재설계가 필요하다.";
+    if (freq >= 100000) {
+      freqStatus.textContent = "현재 firmware의 상한값 부근이다. 실제 코드에서는 100000 Hz clamp와 1 ms reverse guard를 사용하며, drive-side `St-06` bench closure가 아직 남아 있다.";
     } else {
-      freqStatus.textContent = "현재 firmware clamp 안쪽 값이다. 포털에서는 fixed-speed move를 이상화해 보여주며, latest logs 기준 실제 current feedback은 아직 고정 상태라 별도 검증이 더 필요하다.";
+      freqStatus.textContent = "현재 firmware contract 안쪽 값이다. 포털 시뮬레이션은 현재 코드의 pulse contract를 설명하기 위한 모델이며, 실제 bench에서는 drive monitor와 함께 해석해야 한다.";
     }
     steeringCaption.textContent = `Target ${formatSigned(target)} / Current ${formatSigned(0)}`;
     motorCaption.textContent = `Target ${formatSigned(motorDeg, 0)} / Current ${formatSigned(0, 0)} / ${motorRev.toFixed(2)} rev target`;
@@ -926,6 +1069,7 @@ function init() {
   renderEvaluation();
   renderReqs();
   renderTeams();
+  renderRuntimeAtlas();
   renderModules();
   setupSimulation();
   setupNav();
