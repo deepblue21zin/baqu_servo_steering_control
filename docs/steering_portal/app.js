@@ -6,27 +6,27 @@ const portalData = {
   kpis: [
     { label: "Loop period", value: "1 ms", note: "SysTick based control loop" },
     { label: "Runtime split", value: "main -> app", note: "boot entry and app supervisor are now separated" },
-    { label: "Encoder mode", value: "unwrap", note: "TIM4 raw delta accumulated into count" },
-    { label: "Drive monitor", value: "St-06 = 0", note: "current bench bottleneck on 2026-03-25" }
+    { label: "Encoder mode", value: "TIM2 + virtual option", note: "PA0/PB3 real path with optional pulse-integrated bench feedback" },
+    { label: "Bench default", value: "ENCDBG ON", note: "keyboard bench + real TIM2 diag, virtual feedback OFF" }
   ],
   latency: [
-    { name: "Sense", avg: 0.928, p99: 0.961 },
-    { name: "Control", avg: 2.557, p99: 2.583 },
-    { name: "Actuate", avg: 2.281, p99: 2.294 },
-    { name: "Comms", avg: 1.995, p99: 1.917 }
+    { name: "Sense", avg: 3.344, p99: 3.372 },
+    { name: "Control", avg: 3.594, p99: 3.594 },
+    { name: "Actuate", avg: 7.839, p99: 7.844 },
+    { name: "Comms", avg: 2.233, p99: 2.289 }
   ],
   actualTrace: {
-    labels: ["196.67", "196.77", "196.87", "196.97", "197.07", "197.17"],
-    target: [45, 45, 45, 45, 45, 45],
-    current: [-0.604, -0.604, -0.604, -0.604, -0.604, -0.604]
+    labels: ["112.17", "112.27", "112.37", "112.47", "112.57"],
+    target: [40, 40, 40, 40, 40],
+    current: [43.707, 43.699, 43.674, 43.648, 43.623]
   },
   evaluation: {
-    score: 76,
-    verdict: "runtime 분리와 diagnostic 분리로 구조는 더 좋아졌지만, 현재 bench에서는 드라이브가 command pulse를 카운트하지 않아 motion closure가 남아 있다.",
+    score: 72,
+    verdict: "runtime 구조와 telemetry는 설명 가능하지만, 현재 bench 기준 최종 병목은 real encoder truth와 startup safety closure다.",
     summary:
-      "현업 관점에서 이 프로젝트는 단순한 모터 데모가 아니라 센서, 제어, 액추에이터, 로그, 문서를 한 프레임으로 묶은 steering controller baseline으로 설명할 수 있다. 최근에는 `main.c -> app_runtime.c` 분리와 `position_control_diag.c` 분리까지 들어가면서 구조 설명력과 유지보수성이 좋아졌다. 다만 production-complete steering subsystem 기준으로는 drive-side input closure와 startup safety가 아직 남아 있어 현재 평점은 약 76%가 적절하다.",
+      "현업 관점에서 이 프로젝트는 단순한 모터 데모가 아니라 센서, 제어, 액추에이터, 로그, 문서를 한 프레임으로 묶은 steering controller baseline으로 설명할 수 있다. 최근 baseline은 `main.c -> app_runtime.c` 분리, `position_control_diag.c` / `position_control_safety.c` 분리, `TIM2(PA0/PB3)` encoder path, real `[ENCDBG]`와 optional virtual feedback 경로까지 갖췄다. 다만 production-complete steering subsystem 기준으로는 real encoder truth, startup auto-enable 제거, watchdog 정책 정렬이 아직 남아 있어 현재 평점은 약 72%가 적절하다.",
     interviewer:
-      "면접에서는 '이미 완성된 조향 제어기'보다 '구조와 증거 체계를 갖춘 bring-up baseline'으로 설명하는 편이 더 강하다. 특히 command lifecycle, pulse status, encoder unwrap에 더해 runtime과 diagnostic 레이어를 분리한 점은 설계 감각을 보여준다. 대신 최근 bench에서 `St-06 = 0`이라는 드라이브 모니터 근거를 함께 제시하면서, 마지막 병목이 어디인지 명확히 말하는 것이 신뢰를 높인다.",
+      "면접에서는 '이미 완성된 조향 제어기'보다 '구조와 증거 체계를 갖춘 bring-up baseline'으로 설명하는 편이 더 강하다. 특히 command lifecycle, pulse status, real TIM2 encoder diag, virtual feedback bench path를 분리해서 설명하면 설계 감각을 보여주기 좋다. 대신 지금은 real encoder truth가 아직 authoritative하지 않고 startup auto-enable도 남아 있다는 점을 같이 말해야 신뢰가 높아진다.",
     categories: [
       {
         name: "Architecture / Readability",
@@ -41,12 +41,12 @@ const portalData = {
       {
         name: "Actuator Interface",
         score: 76,
-        detail: "requested/applied Hz, reverse guard, direction polarity macro가 추가되며 actuator 계약이 좋아졌다. 다만 현재 bench에서는 drive `St-06 = 0`이라 입력 인정 closure가 아직 남아 있다."
+        detail: "requested/applied Hz, reverse guard, direction polarity macro가 추가되며 actuator 계약이 좋아졌다. 다만 real motion proof는 encoder truth와 함께 다시 닫아야 한다."
       },
       {
         name: "Sensor Truth",
-        score: 58,
-        detail: "encoder unwrap이 들어가고 hand-turn에서 TIM4 count 변화가 확인돼 이전보다 좋아졌다. 하지만 commanded motion 시 authoritative current truth가 아직 완전히 닫히지는 않았다."
+        score: 49,
+        detail: "현재 sensor path는 `TIM2(PA0/PB3)` real path와 optional virtual feedback path로 나뉜다. 구조는 설명 가능하지만, commanded motion 기준 authoritative real truth는 아직 닫히지 않았다."
       },
       {
         name: "Safety / Startup / Fail-safe",
@@ -66,7 +66,7 @@ const portalData = {
       },
       {
         title: "현재 병목이 더 구체적으로 드러났다",
-        detail: "예전에는 encoder raw stuck처럼 보였지만, 최근 bench에서는 hand-turn으로 TIM4 count가 바뀌는 사실과 drive `St-06 = 0`이 함께 확인됐다. 즉 문제 위치가 더 좁혀졌다."
+        detail: "현재는 software pulse path와 controller 구조는 설명 가능하고, 남은 핵심 병목이 real encoder truth와 hardware signal integrity 쪽이라는 점이 더 분명해졌다."
       },
       {
         title: "startup safety와 fault policy는 아직 설명형 수준이다",
@@ -79,8 +79,8 @@ const portalData = {
     ],
     to100: [
       {
-        title: "Drive input recognition을 bench에서 닫아야 한다",
-        detail: "`St-06`, `St-04`, scope waveform, commanded/applied Hz를 같은 장면으로 묶어 drive가 pulse를 어떻게 인식하는지 증명해야 한다."
+        title: "Real encoder chain을 bench에서 닫아야 한다",
+        detail: "`TIM2(PA0/PB3)`, `[ENCDBG]`, scope waveform, line receiver output을 같은 장면으로 묶어 authoritative real feedback을 증명해야 한다."
       },
       {
         title: "Startup / Arm contract를 만들어야 한다",
@@ -118,7 +118,7 @@ const portalData = {
       {
         step: "Step 2",
         title: "센서 truth를 먼저 확인한다",
-        summary: "현재는 `enc_raw`만 보지 않고 `enc_cnt`와 `GetAngleDeg()`를 함께 봐야 한다. 코드에는 unwrap가 이미 들어갔고, 최근 bench에서는 hand-turn 시 TIM4 count 변화도 확인됐다.",
+        summary: "현재는 `enc_raw`만 보지 않고 `enc_cnt`, `GetAngleDeg()`, `[ENCDBG] cnt/delta/A/B`를 함께 봐야 한다. 코드에는 `TIM2(PA0/PB3)` real path와 optional virtual feedback path가 같이 존재한다.",
         vars: [
           "EncoderReader_GetRawCounter()",
           "EncoderReader_GetCount()",
@@ -126,20 +126,20 @@ const portalData = {
           "ADC_Pot_GetAngle()"
         ],
         files: ["encoder_reader.c", "adc_potentiometer.c", "position_control.c"],
-        status: "부분 적용. unwrap는 구현됐지만 commanded motion 기준 sensor truth closure는 아직 남아 있다."
+        status: "부분 적용. TIM2 real path와 virtual bench path는 존재하지만, commanded motion 기준 authoritative sensor truth closure는 아직 남아 있다."
       },
       {
         step: "Step 3",
         title: "error -> output -> direction -> drive monitor를 비교한다",
-        summary: "현재는 state.output만 보는 것이 아니라 requested/applied Hz, reverse guard, direction, drive monitor `St-06 / St-04`를 함께 봐야 한다. 그래야 motion bottleneck이 MCU 쪽인지 drive 쪽인지 분리된다.",
+        summary: "현재는 state.output만 보는 것이 아니라 requested/applied Hz, reverse guard, direction, real `[ENCDBG]`와 scope를 함께 봐야 한다. 그래야 motion bottleneck이 controller 쪽인지 real sensor truth 쪽인지 분리된다.",
         vars: [
           "state.target_angle / current_angle / error",
           "PulseControl_SetFrequency()",
           "PulseControl_GetStatus()",
-          "PE9 pulse / PE10 direction / St-06"
+          "PE9 pulse / PE10 direction / [ENCDBG] / scope"
         ],
-        files: ["position_control.c", "pulse_control.c"],
-        status: "적용됨. reverse guard와 pulse status는 들어갔고, 현재 bench 병목은 drive-side command pulse recognition으로 좁혀졌다."
+        files: ["position_control.c", "pulse_control.c", "app_runtime.c"],
+        status: "적용됨. reverse guard와 pulse status는 들어갔고, 현재 bench 병목은 real hardware closure 쪽으로 좁혀졌다."
       },
       {
         step: "Step 4",
@@ -168,7 +168,7 @@ const portalData = {
       },
       {
         name: "Sense",
-        description: "TIM4 raw와 누적 count를 읽어 current angle을 만든다. ADC는 아직 startup/homing 보조 경로다.",
+        description: "TIM2 raw와 누적 count를 읽어 current angle을 만든다. bench에서는 optional virtual feedback도 선택할 수 있고, ADC는 아직 startup/homing 보조 경로다.",
         vars: ["enc_raw", "enc_cnt", "EncoderReader_GetAngleDeg()", "ADC_Pot_GetAngle()"]
       },
       {
@@ -192,7 +192,7 @@ const portalData = {
         title: "CSV trace 예시",
         snippet:
           "CSV_HEADER,ms,mode,target_deg,current_deg,error_deg,output,dir,enc_cnt,enc_raw,req_hz,applied_hz,out_active,rev_guard,cmd_id,cmd_state,cmd_result\nCSV,196670,1,45.000,-0.604,45.604,10000,1,-966,31802,10000,10000,1,0,202,1,0",
-        note: "현재 코드 기준 CSV는 command lifecycle과 pulse/encoder 상태를 한 줄에서 같이 보여준다. 현재 bench에서는 이런 줄과 함께 drive `St-06` 값을 같이 봐야 한다."
+        note: "현재 코드 기준 CSV는 command lifecycle과 pulse/encoder 상태를 한 줄에서 같이 보여준다. 단, virtual feedback이 켜지면 CSV의 `current/enc_*`는 real TIM2가 아니라 bench 적분값일 수 있으므로 `[ENCDBG]`를 같이 봐야 한다."
       },
       {
         title: "Latency batch 예시",
@@ -220,8 +220,8 @@ const portalData = {
       id: "REQ-P0-002",
       priority: "P0",
       owner: "Actuator / D",
-      title: "drive `St-06 / St-04` 기준 command pulse recognition을 bench에서 닫는다.",
-      detail: "scope waveform, requested/applied Hz, drive monitor를 한 세트로 비교해 pulse가 왜 drive 내부에서 0으로 보이는지 원인을 좁혀야 한다."
+      title: "real encoder chain과 signal integrity를 bench에서 닫는다.",
+      detail: "`TIM2(PA0/PB3)`, line receiver output, scope waveform, `[ENCDBG]`를 한 세트로 비교해 authoritative real encoder truth를 닫아야 한다."
     },
     {
       id: "REQ-P0-003",
@@ -306,7 +306,7 @@ const portalData = {
       owner: "Team D",
       title: "Pulse / Direction / Driver Timing",
       scope: "pulse_control.c, TIM1 contract, PF/PR path, drive monitor",
-      deliverable: "requested/applied Hz contract, `St-06 / St-04` closure, reverse-guard wave proof",
+      deliverable: "requested/applied Hz contract, real encoder `[ENCDBG]` closure, reverse-guard wave proof",
       evidence: "scope capture, drive monitor table, commanded vs applied frequency report"
     },
     {
@@ -335,7 +335,7 @@ const portalData = {
       risks: ["blocking __io_putchar()", "CubeMX merge points still need discipline"],
       files: ["../../Core/Src/main.c", "../../Core/Inc/main.h"],
       doxygen: "../doxygen/html/main_8c_source.html",
-      snippet: "MX_GPIO_Init();\\nMX_USART3_UART_Init();\\nMX_TIM1_Init();\\nMX_TIM4_Init();\\nMX_LWIP_Init();\\nAppRuntime_Init();\\nwhile (1) {\\n    AppRuntime_RunIteration();\\n}",
+      snippet: "MX_GPIO_Init();\\nMX_USART3_UART_Init();\\nMX_TIM1_Init();\\nMX_TIM2_Init();\\nMX_LWIP_Init();\\nAppRuntime_Init();\\nwhile (1) {\\n    AppRuntime_RunIteration();\\n}",
       notes: "최근 리팩터링 이후 main.c는 CubeMX 재생성 경계와 앱 진입점 역할만 남겼다. 실제 startup, super-loop, bench telemetry는 app_runtime.c가 맡는다."
     },
     {
@@ -380,9 +380,9 @@ const portalData = {
     {
       id: "encoder",
       title: "encoder_reader.c",
-      subtitle: "TIM4 raw counter -> unwrap count -> motor angle",
+      subtitle: "TIM2 raw counter / optional virtual feedback -> motor angle",
       owner: "Sensor / C",
-      inputs: ["TIM4 raw counter"],
+      inputs: ["TIM2 raw counter", "optional virtual feedback count"],
       outputs: ["current_angle[motor_deg]", "enc_cnt", "enc_raw"],
       risks: ["long-run wrap validation 미완료", "raw와 count 의미 혼동 가능", "commanded motion proof 미완료"],
       files: ["../../Core/Src/encoder_reader.c", "../../Core/Inc/encoder_reader.h"],
@@ -397,7 +397,7 @@ const portalData = {
       owner: "Actuator / D",
       inputs: ["signed pulse_hz", "step count", "direction enum"],
       outputs: ["TIM1 PWM", "GPIO direction", "applied Hz status", "reverse_guard_active"],
-      risks: ["100 kHz current clamp", "drive `St-06 = 0` bench issue", "logging load와 bench 상호작용"],
+      risks: ["100 kHz current clamp", "real encoder truth unresolved", "logging load와 bench 상호작용"],
       files: ["../../Core/Src/pulse_control.c", "../../Core/Inc/pulse_control.h"],
       doxygen: "../doxygen/html/pulse__control_8c_source.html",
       snippet: "requested_frequency_hz = freq_hz;\\nPulseControl_ServiceReverseGuard();\\nif (target_direction != current_direction) {\\n    PulseControl_BeginReverseGuard(target_direction, target_frequency_hz);\\n    return;\\n}\\nPulseControl_StartContinuousOutput(target_frequency_hz);",
@@ -492,8 +492,8 @@ const portalData = {
     {
       title: "encoder_reader.c",
       file: "Core/Src/encoder_reader.c",
-      role: "TIM4 raw counter를 unwrap count와 motor angle로 바꿔 센서 truth를 제공한다.",
-      receives: ["TIM4->CNT raw counter", "offset_count"],
+      role: "TIM2 raw counter를 unwrap count와 motor angle로 바꾸고, bench에서는 optional virtual feedback도 받을 수 있다.",
+      receives: ["TIM2->CNT raw counter", "virtual feedback count", "offset_count"],
       sends: ["current motor_deg", "enc_cnt", "enc_raw"],
       functions: ["EncoderReader_Init()", "EncoderReader_GetAngleDeg()", "EncoderReader_GetCount()", "EncoderReader_SetOffset()"],
       variables: ["encoder_last_raw", "encoder_count", "encoder_offset", "encoder_initialized"]
@@ -966,7 +966,7 @@ function setupSimulation() {
     buildIdealTrace(target, timeSec);
 
     if (freq >= 100000) {
-      freqStatus.textContent = "현재 firmware의 상한값 부근이다. 실제 코드에서는 100000 Hz clamp와 1 ms reverse guard를 사용하며, drive-side `St-06` bench closure가 아직 남아 있다.";
+      freqStatus.textContent = "현재 firmware의 상한값 부근이다. 실제 코드에서는 100000 Hz clamp와 1 ms reverse guard를 사용하며, final bench closure는 real encoder truth를 authoritative하게 닫는 일이다.";
     } else {
       freqStatus.textContent = "현재 firmware contract 안쪽 값이다. 포털 시뮬레이션은 현재 코드의 pulse contract를 설명하기 위한 모델이며, 실제 bench에서는 drive monitor와 함께 해석해야 한다.";
     }
