@@ -4,81 +4,131 @@
  */
 
 #include "encoder_reader.h"
+
+#include "constants.h"
 #include "tim.h"
+
 #include <stdio.h>
 
 #define ENCODER_TIMER htim2
 #define ENCODER_COUNTER_CENTER 32768UL
 
-/* Encoder configuration (XML-FBL04AMK1) */
-#define PULSE_PER_REV 12000
-#define QUADRATURE    4
-#define COUNT_PER_REV (PULSE_PER_REV * QUADRATURE)
-#define DEG_PER_COUNT (360.0f / COUNT_PER_REV)
+typedef struct {
+    uint16_t raw_count;
+    uint16_t prev_raw_count;
+    int32_t delta_count;
+    int64_t accum_count;
+    int32_t offset_count;
+    uint32_t sample_tick_ms;
+    uint8_t initialized;
+} EncoderReader_State_t; /* MODIFIED(Codex): keep raw/delta/accum/timestamp in one state block. */
 
-static int32_t encoder_count = 0;
-static int32_t encoder_offset = 0;
-static int32_t encoder_delta = 0;
-static uint32_t encoder_last_raw = ENCODER_COUNTER_CENTER;
-static uint8_t initialized = 0;
+static EncoderReader_State_t g_encoder = {0};
 
-static int32_t EncoderReader_UpdateCount(void)
+static int64_t EncoderReader_UpdateCount(void)
 {
-    uint32_t raw = __HAL_TIM_GET_COUNTER(&ENCODER_TIMER);
-    int32_t delta = (int32_t)(raw - encoder_last_raw);
+    uint16_t raw = (uint16_t)__HAL_TIM_GET_COUNTER(&ENCODER_TIMER);
+    int16_t signed_delta = (int16_t)(raw - g_encoder.prev_raw_count);
 
-    encoder_delta = delta;
-    encoder_count += encoder_delta;
-    encoder_last_raw = raw;
+    /* MODIFIED(Codex): unwrap the 16-bit hardware counter by interpreting the delta as int16_t. */
+    g_encoder.raw_count = raw;
+    g_encoder.delta_count = (int32_t)signed_delta;
+    g_encoder.accum_count += (int32_t)signed_delta;
+    g_encoder.prev_raw_count = raw;
+    g_encoder.sample_tick_ms = HAL_GetTick();
 
-    return encoder_count;
+    return g_encoder.accum_count;
 }
 
 int EncoderReader_Init(void)
 {
-    encoder_count = 0;
-    encoder_offset = 0;
-    encoder_delta = 0;
-    encoder_last_raw = ENCODER_COUNTER_CENTER;
     __HAL_TIM_SET_COUNTER(&ENCODER_TIMER, ENCODER_COUNTER_CENTER);
-    initialized = 1;
+
+    g_encoder.raw_count = (uint16_t)ENCODER_COUNTER_CENTER;
+    g_encoder.prev_raw_count = (uint16_t)ENCODER_COUNTER_CENTER;
+    g_encoder.delta_count = 0;
+    g_encoder.accum_count = 0;
+    g_encoder.offset_count = 0;
+    g_encoder.sample_tick_ms = HAL_GetTick();
+    g_encoder.initialized = 1U;
+
     printf("[Encoder] Initialized\n");
     return 0;
 }
 
 float EncoderReader_GetAngleDeg(void)
 {
-    int32_t adjusted_count = EncoderReader_UpdateCount() - encoder_offset;
-    return (float)adjusted_count * DEG_PER_COUNT;
+    return EncoderReader_GetMotorDeg();
+}
+
+float EncoderReader_GetMotorDeg(void)
+{
+    int64_t adjusted_count = EncoderReader_UpdateCount() - (int64_t)g_encoder.offset_count;
+    return (float)adjusted_count * ENCODER_DEG_PER_COUNT;
 }
 
 int32_t EncoderReader_GetCount(void)
 {
-    return EncoderReader_UpdateCount() - encoder_offset;
+    return (int32_t)(EncoderReader_UpdateCount() - (int64_t)g_encoder.offset_count);
+}
+
+int32_t EncoderReader_GetDeltaCount(void)
+{
+    EncoderReader_UpdateCount();
+    return g_encoder.delta_count;
+}
+
+uint8_t EncoderReader_GetSample(EncoderSample_t *out_sample)
+{
+    uint32_t now_ms = 0U;
+
+    if ((out_sample == NULL) || (g_encoder.initialized == 0U)) {
+        return 0U;
+    }
+
+    EncoderReader_UpdateCount();
+    now_ms = HAL_GetTick();
+
+    out_sample->raw_count = g_encoder.raw_count;
+    out_sample->delta_count = g_encoder.delta_count;
+    out_sample->accum_count = g_encoder.accum_count - (int64_t)g_encoder.offset_count;
+    out_sample->motor_deg = (float)out_sample->accum_count * ENCODER_DEG_PER_COUNT;
+    out_sample->sample_tick_ms = g_encoder.sample_tick_ms;
+    out_sample->age_ms = now_ms - g_encoder.sample_tick_ms;
+    return 1U;
 }
 
 uint32_t EncoderReader_GetRawCounter(void)
 {
-    return __HAL_TIM_GET_COUNTER(&ENCODER_TIMER);
+    if (g_encoder.initialized == 0U) {
+        return (uint32_t)((uint16_t)__HAL_TIM_GET_COUNTER(&ENCODER_TIMER));
+    }
+
+    EncoderReader_UpdateCount();
+    return (uint32_t)g_encoder.raw_count;
 }
 
 void EncoderReader_Reset(void)
 {
     __HAL_TIM_SET_COUNTER(&ENCODER_TIMER, ENCODER_COUNTER_CENTER);
-    encoder_count = 0;
-    encoder_offset = 0;
-    encoder_delta = 0;
-    encoder_last_raw = ENCODER_COUNTER_CENTER;
+
+    g_encoder.raw_count = (uint16_t)ENCODER_COUNTER_CENTER;
+    g_encoder.prev_raw_count = (uint16_t)ENCODER_COUNTER_CENTER;
+    g_encoder.delta_count = 0;
+    g_encoder.accum_count = 0;
+    g_encoder.offset_count = 0;
+    g_encoder.sample_tick_ms = HAL_GetTick();
+
     printf("[Encoder] Reset\n");
 }
 
 void EncoderReader_SetOffset(int32_t offset)
 {
-    encoder_offset = offset;
+    g_encoder.offset_count = offset;
     printf("[Encoder] Offset set: %ld\n", offset);
 }
 
 uint8_t EncoderReader_IsInitialized(void)
 {
-    return initialized;
+    return g_encoder.initialized;
 }

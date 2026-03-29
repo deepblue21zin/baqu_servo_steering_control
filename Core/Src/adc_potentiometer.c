@@ -1,110 +1,171 @@
 /**
  * @file adc_potentiometer.c
  * @brief ADC Potentiometer implementation
- * @author Person C
  */
 
+#include "adc_potentiometer.h"
 
 #include "adc.h"
-#include "adc_potentiometer.h"
-#include <stdio.h>
+#include "constants.h"
+
 #include <stdint.h>
+#include <stdio.h>
 
-
-
-/* ========== Private Variables ========== */
+typedef struct {
+    uint16_t prev_raw;
+    uint16_t same_count;
+    uint16_t jump_threshold_raw;
+    uint16_t stuck_threshold_count;
+    uint16_t disconnect_low_raw;
+    uint16_t disconnect_high_raw;
+    uint16_t valid_min_raw;
+    uint16_t valid_max_raw;
+    uint32_t last_sample_tick_ms;
+    uint8_t initialized;
+} ADC_PotDiag_t; /* MODIFIED(Codex): local ADC diagnostics state used for validity flags. */
 
 static ADC_PotConfig_t pot_config = {
     .hadc = NULL,
-    .channel = ADC_CHANNEL_4,  // PA4
-    .min_angle = -90.0f,
-    .max_angle = 90.0f,
-    .min_raw = 0,
-    .max_raw = 4095
+    .channel = ADC_CHANNEL_4,
+    .min_angle = POT_MIN_ANGLE_DEG,
+    .max_angle = POT_MAX_ANGLE_DEG,
+    .min_raw = 0U,
+    .max_raw = (uint16_t)ADC_MAX_COUNT
 };
 
-/* ========== Public Functions ========== */
+static ADC_PotDiag_t g_pot_diag = {
+    .prev_raw = 0U,
+    .same_count = 0U,
+    .jump_threshold_raw = 128U,
+    .stuck_threshold_count = 50U,
+    .disconnect_low_raw = 1U,
+    .disconnect_high_raw = 4094U,
+    .valid_min_raw = 0U,
+    .valid_max_raw = (uint16_t)ADC_MAX_COUNT,
+    .last_sample_tick_ms = 0U,
+    .initialized = 0U
+};
 
-/**
- * @brief Initialize ADC potentiometer
- */
+static float ADC_Pot_ConvertRawToAngle(uint16_t raw)
+{
+    if (pot_config.max_raw <= pot_config.min_raw) {
+        return pot_config.min_angle;
+    }
+
+    return pot_config.min_angle +
+           ((float)(raw - pot_config.min_raw) *
+            (pot_config.max_angle - pot_config.min_angle) /
+            (float)(pot_config.max_raw - pot_config.min_raw));
+}
+
+static uint32_t ADC_Pot_EvaluateValidity(uint16_t raw)
+{
+    uint32_t flags = ADC_POT_VALID;
+    uint16_t diff = (raw >= g_pot_diag.prev_raw) ? (raw - g_pot_diag.prev_raw) :
+                    (g_pot_diag.prev_raw - raw);
+
+    /* MODIFIED(Codex): surface disconnect/range/jump/stuck information to callers via validity bits. */
+    if (g_pot_diag.initialized == 0U) {
+        flags |= ADC_POT_INVALID_NOT_INIT;
+    }
+    if ((raw <= g_pot_diag.disconnect_low_raw) || (raw >= g_pot_diag.disconnect_high_raw)) {
+        flags |= ADC_POT_INVALID_DISCONNECT;
+    } else if ((raw < g_pot_diag.valid_min_raw) || (raw > g_pot_diag.valid_max_raw)) {
+        flags |= ADC_POT_INVALID_RANGE;
+    }
+    if (diff > g_pot_diag.jump_threshold_raw) {
+        flags |= ADC_POT_INVALID_JUMP;
+    }
+    if (raw == g_pot_diag.prev_raw) {
+        g_pot_diag.same_count++;
+        if (g_pot_diag.same_count >= g_pot_diag.stuck_threshold_count) {
+            flags |= ADC_POT_INVALID_STUCK;
+        }
+    } else {
+        g_pot_diag.same_count = 0U;
+    }
+
+    g_pot_diag.prev_raw = raw;
+    g_pot_diag.last_sample_tick_ms = HAL_GetTick();
+    return flags;
+}
+
 int ADC_Pot_Init(ADC_PotConfig_t *config)
 {
     if (config != NULL) {
         pot_config = *config;
     }
-    
-    // Use default hadc1 if not provided
+
     if (pot_config.hadc == NULL) {
         pot_config.hadc = &hadc1;
     }
-    
-    // Start ADC
+
+    g_pot_diag.valid_min_raw = pot_config.min_raw;
+    g_pot_diag.valid_max_raw = pot_config.max_raw;
+
     if (HAL_ADC_Start(pot_config.hadc) != HAL_OK) {
         return -1;
     }
-    
+
+    g_pot_diag.initialized = 1U;
     return 0;
 }
 
-/**
- * @brief Get raw ADC value
- */
 uint16_t ADC_Pot_GetRaw(void)
 {
-    // Start conversion
+    if (pot_config.hadc == NULL) {
+        return 0U;
+    }
+
     HAL_ADC_Start(pot_config.hadc);
-    
-    // Wait for conversion
-    if (HAL_ADC_PollForConversion(pot_config.hadc, 100) == HAL_OK) {
+    if (HAL_ADC_PollForConversion(pot_config.hadc, 100U) == HAL_OK) {
         return (uint16_t)HAL_ADC_GetValue(pot_config.hadc);
     }
-    
-    return 0;
+
+    return 0U;
 }
 
-/**
- * @brief Get voltage
- */
 float ADC_Pot_GetVoltage(void)
 {
     uint16_t raw = ADC_Pot_GetRaw();
-    
-    // Convert to voltage (0-3.3V for 12-bit ADC)
-    float voltage = (float)raw * 3.3f / 4095.0f;
-    
-    return voltage;
+    return ((float)raw * ADC_VREF) / ADC_MAX_COUNT;
 }
 
-/**
- * @brief Get angle in degrees
- */
 float ADC_Pot_GetAngle(void)
 {
-    uint16_t raw = ADC_Pot_GetRaw();
-    
-    // Map raw value to angle
-    float angle = pot_config.min_angle + 
-                  (float)(raw - pot_config.min_raw) * 
-                  (pot_config.max_angle - pot_config.min_angle) / 
-                  (float)(pot_config.max_raw - pot_config.min_raw);
-    
-    return angle;
+    return ADC_Pot_ConvertRawToAngle(ADC_Pot_GetRaw());
 }
 
-/**
- * @brief Calibrate potentiometer
- */
+uint8_t ADC_Pot_GetSample(ADC_PotSample_t *out_sample)
+{
+    uint16_t raw = 0U;
+    uint32_t now_ms = 0U;
+
+    if (out_sample == NULL) {
+        return 0U;
+    }
+
+    raw = ADC_Pot_GetRaw();
+    now_ms = HAL_GetTick();
+
+    out_sample->raw = raw;
+    out_sample->voltage = ((float)raw * ADC_VREF) / ADC_MAX_COUNT;
+    out_sample->calibrated_angle_deg = ADC_Pot_ConvertRawToAngle(raw);
+    out_sample->sample_tick_ms = now_ms;
+    out_sample->age_ms = now_ms - g_pot_diag.last_sample_tick_ms;
+    out_sample->validity = ADC_Pot_EvaluateValidity(raw);
+    return 1U;
+}
+
 void ADC_Pot_Calibrate(float min_angle, float max_angle)
 {
-    // Read current position as minimum
     pot_config.min_raw = ADC_Pot_GetRaw();
     pot_config.min_angle = min_angle;
-    
-    // Wait for user to move to maximum
-    HAL_Delay(3000);  // 3 seconds
-    
-    // Read maximum position
+
+    HAL_Delay(3000U);
+
     pot_config.max_raw = ADC_Pot_GetRaw();
     pot_config.max_angle = max_angle;
+    g_pot_diag.valid_min_raw = pot_config.min_raw;
+    g_pot_diag.valid_max_raw = pot_config.max_raw;
 }
