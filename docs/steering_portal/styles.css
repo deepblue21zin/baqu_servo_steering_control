@@ -735,6 +735,96 @@ input[type="range"] {
   margin-bottom: 18px;
 }
 
+.runtime-flow,
+.runtime-atlas-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.runtime-flow {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 18px;
+}
+
+.runtime-stage,
+.runtime-atlas-card {
+  background: rgba(248, 251, 254, 0.94);
+  border-radius: 22px;
+  padding: 18px 20px;
+  border: 1px solid rgba(33, 73, 122, 0.08);
+}
+
+.runtime-stage {
+  position: relative;
+  overflow: hidden;
+}
+
+.runtime-stage::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 6px;
+  background: linear-gradient(180deg, var(--accent), var(--teal));
+}
+
+.runtime-stage h3,
+.runtime-atlas-card h3 {
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+
+.runtime-stage .caption,
+.runtime-atlas-card .caption {
+  line-height: 1.65;
+}
+
+.runtime-atlas-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.runtime-file-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: rgba(33, 92, 147, 0.10);
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.runtime-role {
+  margin: 10px 0 14px;
+  color: var(--muted);
+}
+
+.runtime-io-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 14px 0;
+}
+
+.runtime-io-box {
+  padding: 14px 15px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(33, 73, 122, 0.08);
+}
+
+.runtime-io-box h4,
+.runtime-list-block h4 {
+  margin: 0 0 10px;
+  font-size: 0.98rem;
+}
+
+.runtime-list-block + .runtime-list-block {
+  margin-top: 14px;
+}
+
 .log-snippet {
   margin: 12px 0 0;
   padding: 16px;
@@ -864,6 +954,8 @@ input[type="range"] {
   .analysis-step-grid,
   .analysis-log-grid,
   .analysis-phase-grid,
+  .runtime-flow,
+  .runtime-atlas-grid,
   .status-grid,
   .issue-grid,
   .team-grid,
@@ -888,6 +980,8 @@ input[type="range"] {
   .analysis-step-grid,
   .analysis-log-grid,
   .analysis-phase-grid,
+  .runtime-flow,
+  .runtime-atlas-grid,
   .status-grid,
   .issue-grid,
   .team-grid,
@@ -903,6 +997,10 @@ input[type="range"] {
   }
 
   .req-row {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-io-grid {
     grid-template-columns: 1fr;
   }
 

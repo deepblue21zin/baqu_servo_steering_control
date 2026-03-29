@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Embedded Steering Servo Controller Portfolio</title>
+<style>
+  :root{
+    --bg:#eef5fb;
+    --paper:#ffffff;
+    --paper-soft:#f7fbff;
+    --ink:#17324d;
+    --muted:#5d7388;
+    --line:#d7e3ef;
+    --blue:#1f6fd6;
+    --teal:#167d72;
+    --amber:#b9770a;
+    --red:#c04c4c;
+    --navy:#0f2235;
+    --shadow:0 18px 42px rgba(26, 56, 90, 0.10);
+    --radius:20px;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    color:var(--ink);
+    font-family:"IBM Plex Sans KR","Pretendard Variable","Segoe UI","Noto Sans KR",sans-serif;
+    background:
+      radial-gradient(circle at top left, rgba(31,111,214,.12), transparent 28%),
+      radial-gradient(circle at right 20%, rgba(22,125,114,.10), transparent 22%),
+      linear-gradient(180deg,#fbfdff 0%, var(--bg) 100%);
+    line-height:1.65;
+  }
+  .wrap{
+    max-width:1220px;
+    margin:0 auto;
+    padding:32px 22px 84px;
+  }
+  .hero{
+    display:grid;
+    grid-template-columns:1.2fr .8fr;
+    gap:22px;
+    background:
+      linear-gradient(140deg, rgba(255,255,255,.98), rgba(245,250,255,.94)),
+      linear-gradient(180deg,#ffffff,#f5f9fe);
+    border:1px solid var(--line);
+    border-radius:28px;
+    padding:28px;
+    box-shadow:var(--shadow);
+  }
+  .eyebrow{
+    display:inline-block;
+    font-size:12px;
+    letter-spacing:.18em;
+    text-transform:uppercase;
+    color:var(--blue);
+    margin-bottom:10px;
+    font-weight:700;
+  }
+  h1,h2,h3,h4,p{margin:0}
+  h1{
+    font-size:40px;
+    line-height:1.15;
+    margin-bottom:12px;
+    color:var(--navy);
+  }
+  .subtitle{
+    color:var(--muted);
+    font-size:17px;
+    max-width:760px;
+  }
+  .hero-tags{
+    display:flex;
+    flex-wrap:wrap;
+    gap:10px;
+    margin-top:18px;
+  }
+  .tag{
+    padding:7px 12px;
+    border-radius:999px;
+    background:#eef4fb;
+    border:1px solid var(--line);
+    font-size:13px;
+    color:var(--ink);
+  }
+  .tag strong{color:var(--navy)}
+  .hero-side{
+    display:grid;
+    gap:12px;
+  }
+  .mini-card{
+    background:var(--paper-soft);
+    border:1px solid var(--line);
+    border-radius:18px;
+    padding:16px 18px;
+  }
+  .mini-card .label{
+    font-size:12px;
+    color:var(--muted);
+    text-transform:uppercase;
+    letter-spacing:.08em;
+  }
+  .mini-card .value{
+    font-size:22px;
+    margin-top:4px;
+    font-weight:800;
+    color:var(--navy);
+  }
+  .mini-card .desc{
+    margin-top:8px;
+    color:var(--muted);
+    font-size:14px;
+  }
+  .section{
+    margin-top:26px;
+    background:rgba(255,255,255,.88);
+    border:1px solid var(--line);
+    border-radius:var(--radius);
+    padding:24px;
+    box-shadow:var(--shadow);
+  }
+  .section h2{
+    font-size:26px;
+    margin-bottom:14px;
+    color:var(--navy);
+  }
+  .section-intro{
+    color:var(--muted);
+    margin-bottom:18px;
+  }
+  .stats{
+    display:grid;
+    grid-template-columns:repeat(4,minmax(0,1fr));
+    gap:14px;
+  }
+  .stat{
+    padding:16px;
+    border:1px solid var(--line);
+    background:var(--paper-soft);
+    border-radius:18px;
+  }
+  .stat .k{
+    font-size:12px;
+    text-transform:uppercase;
+    letter-spacing:.08em;
+    color:var(--muted);
+  }
+  .stat .v{
+    font-size:28px;
+    font-weight:800;
+    color:var(--navy);
+    margin:5px 0 6px;
+  }
+  .stat .d{
+    color:var(--muted);
+    font-size:14px;
+  }
+  .grid-2{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:18px;
+  }
+  .grid-3{
+    display:grid;
+    grid-template-columns:repeat(3,minmax(0,1fr));
+    gap:16px;
+  }
+  .panel{
+    background:var(--paper-soft);
+    border:1px solid var(--line);
+    border-radius:18px;
+    padding:18px;
+  }
+  .panel h3{
+    font-size:18px;
+    margin-bottom:10px;
+    color:var(--navy);
+  }
+  .panel p{
+    color:var(--muted);
+  }
+  table{
+    width:100%;
+    border-collapse:collapse;
+    border:1px solid var(--line);
+    border-radius:18px;
+    overflow:hidden;
+    background:#fff;
+  }
+  th,td{
+    padding:12px 14px;
+    border-bottom:1px solid var(--line);
+    text-align:left;
+    vertical-align:top;
+    font-size:14px;
+  }
+  th{
+    background:#eef4fb;
+    color:var(--navy);
+  }
+  tr:last-child td{
+    border-bottom:none;
+  }
+  .bullets{
+    padding-left:18px;
+    margin:10px 0 0;
+  }
+  .bullets li{
+    margin:7px 0;
+  }
+  .flow{
+    display:grid;
+    grid-template-columns:repeat(6,minmax(0,1fr));
+    gap:10px;
+    align-items:stretch;
+  }
+  .flow-box{
+    background:#ffffff;
+    border:1px solid var(--line);
+    border-radius:18px;
+    padding:14px;
+    min-height:132px;
+    position:relative;
+  }
+  .flow-box strong{
+    display:block;
+    font-size:15px;
+    margin-bottom:6px;
+    color:var(--navy);
+  }
+  .flow-box span{
+    color:var(--muted);
+    font-size:14px;
+  }
+  .flow-box::after{
+    content:"→";
+    position:absolute;
+    right:-12px;
+    top:50%;
+    transform:translateY(-50%);
+    font-size:22px;
+    color:#8aa8c4;
+    font-weight:700;
+  }
+  .flow-box:last-child::after{display:none}
+  .flow-box.warn{
+    border-color:#f0d5a2;
+    background:#fff8ea;
+  }
+  .lane{
+    margin-top:14px;
+    padding:14px;
+    border-radius:18px;
+    border:1px dashed #efc46d;
+    background:#fffaf1;
+  }
+  .lane strong{
+    color:#7f5705;
+  }
+  figure{
+    margin:0;
+  }
+  .figure-card{
+    border:1px solid var(--line);
+    border-radius:18px;
+    overflow:hidden;
+    background:#fff;
+  }
+  .figure-card img{
+    display:block;
+    width:100%;
+    height:auto;
+    background:#fff;
+  }
+  .caption{
+    padding:14px 16px 16px;
+    border-top:1px solid var(--line);
+    background:var(--paper-soft);
+  }
+  .caption strong{
+    display:block;
+    margin-bottom:6px;
+    color:var(--navy);
+  }
+  .caption p{
+    color:var(--muted);
+    font-size:14px;
+  }
+  pre{
+    margin:0;
+    padding:16px;
+    border-radius:16px;
+    background:#f4f8fc;
+    color:#17314a;
+    border:1px solid var(--line);
+    overflow:auto;
+    white-space:pre-wrap;
+    font-size:13px;
+    line-height:1.55;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  .badge{
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    font-size:13px;
+    padding:7px 12px;
+    border-radius:999px;
+    border:1px solid var(--line);
+    background:#fff;
+  }
+  .ok{color:var(--teal)}
+  .risk{color:var(--amber)}
+  .stop{color:var(--red)}
+  .roadmap{
+    display:grid;
+    gap:12px;
+  }
+  .step{
+    display:grid;
+    grid-template-columns:92px 1fr;
+    gap:16px;
+    padding:16px;
+    border-radius:18px;
+    border:1px solid var(--line);
+    background:var(--paper-soft);
+  }
+  .step .phase{
+    font-size:13px;
+    font-weight:700;
+    color:var(--blue);
+    text-transform:uppercase;
+    letter-spacing:.06em;
+  }
+  .step h4{
+    font-size:18px;
+    margin-bottom:6px;
+    color:var(--navy);
+  }
+  .step p{
+    color:var(--muted);
+    font-size:14px;
+  }
+  .footer{
+    margin-top:24px;
+    text-align:center;
+    color:var(--muted);
+    font-size:13px;
+  }
+  @media (max-width:1060px){
+    .hero,.stats,.grid-2,.grid-3{grid-template-columns:1fr 1fr}
+    .flow{grid-template-columns:repeat(3,minmax(0,1fr))}
+    .flow-box:nth-child(3)::after{display:none}
+  }
+  @media (max-width:760px){
+    .hero,.stats,.grid-2,.grid-3,.flow{grid-template-columns:1fr}
+    .flow-box::after{display:none}
+    .step{grid-template-columns:1fr}
+    h1{font-size:31px}
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <div>
+        <span class="eyebrow">Embedded Controls Portfolio</span>
+        <h1>Autonomous Steering Servo Controller</h1>
+        <p class="subtitle">
+          STM32F429ZI, LS ELECTRIC XDL-L7SA004BAA, XML-FBL04AMK1을 기반으로 한 조향 서브컨트롤러 프로젝트다.
+          1 ms 제어 루프, command lifecycle, pulse/direction 출력, safety 분리, runtime trace 체계를 실제 bench bring-up까지 연결해
+          “동작하는 임베디드 제어 시스템을 어떻게 설계하고 좁혀 가는지”를 보여주는 작업으로 정리했다.
+        </p>
+        <div class="hero-tags">
+          <span class="tag"><strong>MCU</strong> STM32F429ZI @ 180 MHz</span>
+          <span class="tag"><strong>Loop</strong> 1 ms runtime service</span>
+          <span class="tag"><strong>Pulse</strong> PE9 / PE10 via TIM1 + DIR</span>
+          <span class="tag"><strong>Encoder</strong> TIM2 / PA0 / PB3</span>
+          <span class="tag"><strong>Drive</strong> XDL-L7SA004BAA</span>
+          <span class="tag"><strong>Status</strong> integration & feedback closure</span>
+        </div>
+      </div>
+      <div class="hero-side">
+        <div class="mini-card">
+          <div class="label">Current Stage</div>
+          <div class="value">System Integration</div>
+          <div class="desc">드라이브 pulse recognition과 내부 encoder truth는 확보했고, 외부 encoder feedback chain 안정화가 현재 최우선 과제다.</div>
+        </div>
+        <div class="mini-card">
+          <div class="label">What is already proven</div>
+          <div class="value">1 ms runtime + measured trace</div>
+          <div class="desc">CSV, latency batch, command lifecycle, split runtime/safety/diagnostic structure까지 구현과 관측이 끝난 상태다.</div>
+        </div>
+        <div class="mini-card">
+          <div class="label">Final Objective</div>
+          <div class="value">Robust closed-loop steering node</div>
+          <div class="desc">startup contract, fault latch, validated sensor truth, homing, and communication fail-safe까지 포함한 제품형 steering controller를 목표로 한다.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Project At A Glance</h2>
+      <p class="section-intro">
+        이 페이지는 “완성품”보다 “실제로 어떤 구조를 만들었고, 무엇이 이미 검증됐으며, 남은 문제를 어떻게 좁혀 가고 있는지”를 보여주기 위한 포트폴리오다.
+      </p>
+      <div class="stats">
+        <div class="stat">
+          <div class="k">Runtime</div>
+          <div class="v">1 ms</div>
+          <div class="d">SysTick 기반 fast service, periodic latency batch instrumentation 포함</div>
+        </div>
+        <div class="stat">
+          <div class="k">Encoder Resolution</div>
+          <div class="v">48,000</div>
+          <div class="d">12000 PPR encoder, quadrature x4 기준 count/rev</div>
+        </div>
+        <div class="stat">
+          <div class="k">Measured Control Avg</div>
+          <div class="v">2.52 us</div>
+          <div class="d">최근 batch 기준 control stage 평균 시간</div>
+        </div>
+        <div class="stat">
+          <div class="k">Current Bottleneck</div>
+          <div class="v">Feedback Chain</div>
+          <div class="d">AO/BO 재출력부터 TIM2 입력까지의 외부 encoder path 안정화가 남아 있다</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>System Architecture</h2>
+      <p class="section-intro">
+        소프트웨어 구조는 최근 리팩터링을 통해 부트, runtime orchestration, control, diagnostics, safety를 분리했다.
+        하드웨어 흐름도는 아래처럼 command path와 feedback path를 구분해 읽는 것이 핵심이다.
+      </p>
+      <div class="flow">
+        <div class="flow-box">
+          <strong>Command Source</strong>
+          <span>Keyboard bench / UDP packet / local test source</span>
+        </div>
+        <div class="flow-box">
+          <strong>app_runtime.c</strong>
+          <span>startup, watchdog, CSV/DIAG, mode handling, 1 ms scheduling</span>
+        </div>
+        <div class="flow-box">
+          <strong>position_control.c</strong>
+          <span>PID, lifecycle, output generation, final stop / emergency action</span>
+        </div>
+        <div class="flow-box">
+          <strong>pulse_control.c</strong>
+          <span>signed Hz to TIM1 pulse + direction, reverse guard, status API</span>
+        </div>
+        <div class="flow-box">
+          <strong>Servo Drive</strong>
+          <span>Pulse/Dir recognition, motor actuation, internal encoder truth</span>
+        </div>
+        <div class="flow-box">
+          <strong>Motor</strong>
+          <span>Steering actuator, XML-FBL04AMK1 servo motor</span>
+        </div>
+      </div>
+      <div class="lane">
+        <strong>Feedback lane:</strong>
+        Drive internal encoder truth (`St-16`, `St-03`) is already moving, while the external chain
+        `AO/BO -> level shifter -> jumper/breadboard -> TIM2(PA0/PB3) -> encoder_reader.c`
+        remains the unstable segment currently under bench investigation.
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>What I Have Built So Far</h2>
+      <div class="grid-3">
+        <div class="panel">
+          <h3>Runtime Architecture</h3>
+          <p>`main.c`를 얇은 부트 진입점으로 만들고 `app_runtime.c`로 startup, keyboard bench, watchdog, periodic trace, fast tick service를 옮겼다.</p>
+          <ul class="bullets">
+            <li>CubeMX init 이후 application runtime 호출 구조 정리</li>
+            <li>CSV / latency batch / keyboard snapshot 통합</li>
+            <li>bench bring-up과 runtime evidence를 같은 축으로 유지</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>Control + Safety Separation</h3>
+          <p>`position_control.c`, `position_control_diag.c`, `position_control_safety.c`로 책임을 나눠 제어 수학, 진단, safety evaluator를 분리했다.</p>
+          <ul class="bullets">
+            <li>command lifecycle: start / reached / abort / fault</li>
+            <li>angle / tracking / velocity limit evaluator 분리</li>
+            <li>final emergency cut-off는 control loop 가까이에 유지</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>Pulse / Feedback Bring-up</h3>
+          <p>Pulse output, drive recognition, encoder path A/B testing을 실제 bench 데이터와 함께 추적했다.</p>
+          <ul class="bullets">
+            <li>TIM1 pulse + direction output status API</li>
+            <li>TIM4에서 TIM2로 encoder path 이관 후 비교 검증</li>
+            <li>feedback runaway와 sensor gap을 로그로 재현 가능하게 정리</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Measured Evidence</h2>
+      <p class="section-intro">
+        아래 자료는 단순한 장식이 아니라, 현재 프로젝트 상태를 판단하는 실제 근거다.
+        첫 번째 그림은 control trace, 두 번째 그림은 latency trace다.
+      </p>
+      <div class="grid-2">
+        <figure class="figure-card">
+          <img src="../../putty_log/plots/control_trace.png" alt="Steering control trace plot">
+          <figcaption class="caption">
+            <strong>Control Trace</strong>
+            <p>
+              target command는 변하지만 current trace는 0 deg 부근에 머물고, output command는 계속 움직인다.
+              즉 drive-side actuation path는 살아 있지만 sensor truth closure가 아직 닫히지 않았다는 점을 시각적으로 보여준다.
+            </p>
+          </figcaption>
+        </figure>
+        <figure class="figure-card">
+          <img src="../../putty_log/plots/latency_trace.png" alt="Latency trace plot">
+          <figcaption class="caption">
+            <strong>Latency Trace</strong>
+            <p>
+              1 ms loop 안에서 stage별 runtime cost를 지속 측정하고 있으며,
+              Sense / Control / Actuate / Comms가 모두 single-digit microsecond 수준에서 관측되고 있다.
+            </p>
+          </figcaption>
+        </figure>
+      </div>
+
+      <div class="grid-2" style="margin-top:18px">
+        <div class="panel">
+          <h3>Recent Latency Numbers</h3>
+          <div class="hero-tags" style="margin-top:0">
+            <span class="badge ok">Sense avg 0.928 us</span>
+            <span class="badge ok">Control avg 2.517 us</span>
+            <span class="badge ok">Actuate avg 2.283 us</span>
+            <span class="badge ok">Comms avg 1.900 us</span>
+          </div>
+          <p style="margin-top:12px">
+            최근 `putty.log` 배치에서 p99도 대부분 3 us 이하로 유지되고 있다. 이는 제어 알고리즘 그 자체보다
+            현재 병목이 하드웨어 feedback interface 쪽이라는 판단을 뒷받침한다.
+          </p>
+        </div>
+        <div class="panel">
+          <h3>Drive-Side Verification</h3>
+          <div class="hero-tags" style="margin-top:0">
+            <span class="badge ok">Drive `P-RUN` verified</span>
+            <span class="badge ok">`St-06 ≈ 10.0 kpps`</span>
+            <span class="badge ok">`St-16`, `St-03` changing</span>
+          </div>
+          <p style="margin-top:12px">
+            이 세 가지는 drive pulse recognition과 drive internal encoder truth가 이미 성립했다는 뜻이다.
+            따라서 현재 문제는 drive 이전이 아니라 drive 외부 재출력 이후 구간에 있다고 좁힐 수 있었다.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Meaningful Runtime Excerpts</h2>
+      <p class="section-intro">
+        포트폴리오에서 중요한 것은 “잘 됐다”만 보여주는 것이 아니라, 문제를 어떻게 정의하고 증거로 좁혔는지를 보여주는 것이다.
+      </p>
+      <div class="grid-2">
+        <div class="panel">
+          <h3>Evidence A: command path is alive</h3>
+          <pre>CSV,9151,1,4.000,0.000,4.000,3217,1,0,32768,3217,3218,1,0,6,1,0
+CSV,9251,1,4.000,0.000,4.000,3242,1,0,32768,3242,3243,1,0,6,1,0
+CSV,9351,1,4.000,0.000,4.000,3267,1,0,32768,3267,3268,1,0,6,1,0</pre>
+          <p style="margin-top:12px">
+            `output`, `req_hz`, `applied_hz`, `out_active`는 살아 있는데 `enc_cnt=0`, `enc_raw=32768`이 고정된다.
+            이 로그는 “제어기가 멈춘 것”이 아니라 “명령은 나가지만 외부 feedback truth가 닫히지 않는다”는 뜻이다.
+          </p>
+        </div>
+        <div class="panel">
+          <h3>Evidence B: probing can trigger runaway count</h3>
+          <pre>CSV,395999,99,9.000,-851883.500,851892.438,0,1,-1419806177,2875193880,0,0,0,0,9,5,6
+CSV,396099,99,9.000,-852818.438,852827.500,0,1,-1421364446,2873635616,0,0,0,0,9,5,6
+CSV,396199,99,9.000,-853748.688,853757.750,0,1,-1422914758,2872085295,0,0,0,0,9,5,6</pre>
+          <p style="margin-top:12px">
+            오실로스코프 연결 시 외부 encoder chain이 폭주하면서 command state가 `FAULTED`로 넘어간 사례다.
+            이건 단순한 timer 설정 문제가 아니라, level shifter / jumper / GND reference를 포함한 feedback interface 불안정 문제라는 점을 강하게 보여준다.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Current Engineering Assessment</h2>
+      <div class="grid-3">
+        <div class="panel">
+          <h3>What is already closed</h3>
+          <ul class="bullets">
+            <li>1 ms runtime scheduling and trace collection</li>
+            <li>command lifecycle and bench-mode runtime instrumentation</li>
+            <li>pulse output generation with reverse guard</li>
+            <li>drive pulse recognition (`St-06`) and motor actuation</li>
+            <li>drive internal encoder truth (`St-16`, `St-03`)</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>What is under active investigation</h3>
+          <ul class="bullets">
+            <li>AO/BO external encoder re-output quality</li>
+            <li>level shifter / line receiver output stability</li>
+            <li>breadboard and jumper induced GND/reference noise</li>
+            <li>TIM2 input truth versus probe-induced runaway count</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>Why this still matters</h3>
+          <ul class="bullets">
+            <li>이 프로젝트는 “완성 전에도” 시스템 통합 능력을 잘 보여준다</li>
+            <li>증거 기반으로 병목을 줄여 가는 bring-up 방법론이 드러난다</li>
+            <li>구조 분리, safety thinking, measurement discipline을 함께 설명할 수 있다</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Code Audit: Startup, Speed, Watchdog</h2>
+      <p class="section-intro">
+        아래 평가는 현재 소스를 기준으로 한 현업식 코드 audit이다. 중요한 포인트는 “bench에서 이해되는 선택”과 “제품 설명용으로 바로 지적받을 선택”을 분리해서 보는 것이다.
+      </p>
+      <div class="grid-3">
+        <div class="panel">
+          <h3>1. Startup Policy Assessment</h3>
+          <p>
+            현재 [`AppRuntime_Init()`]는 encoder start 직후 `Relay_ServoOn()`, `EncoderReader_Reset()`,
+            `PositionControl_SetTargetWithSource(0)`, `PositionControl_Enable()`를 연속 호출한다.
+            그리고 [`PositionControl_Enable()`]는 내부에서 `Relay_EmergencyRelease()`까지 수행한다.
+          </p>
+          <ul class="bullets">
+            <li><strong>bench 관점:</strong> 전원 넣자마자 모터/엔코더 bring-up을 보기 편하다</li>
+            <li><strong>현업 관점:</strong> homing, angle validity, command freshness, servo alarm, operator acknowledgement 없이 servo가 열린다</li>
+            <li><strong>평가:</strong> bench startup profile로는 이해되지만, production startup contract로는 방어하기 어렵다</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>2. Speed Ceiling Assessment</h3>
+          <p>
+            현재 속도는 드라이브 capability보다 소프트웨어 제한이 먼저 막고 있다. 실제 병목은 세 겹이다.
+          </p>
+          <ul class="bullets">
+            <li>`position_control.c`의 `output_limit = 10000` → 실제 controller ceiling은 약 <strong>10 kpps</strong></li>
+            <li>`pulse_control.c`의 clamp `100000 Hz` → pulse layer ceiling은 약 <strong>100 kpps</strong></li>
+            <li>현재 TIM1 prescaler 기준 이론 hardware ceiling은 약 <strong>416.7 kpps</strong></li>
+          </ul>
+          <p style="margin-top:10px">
+            `0.003 motor_deg/pulse`와 `12.5:1` 기어비 기준, 지금 controller ceiling 10 kpps는 약 <strong>2.4 deg/s steering</strong>다.
+            즉 45 deg step 기준 이론적으로 약 18.75초가 걸린다.
+          </p>
+        </div>
+        <div class="panel">
+          <h3>3. Watchdog Assessment</h3>
+          <p>
+            현재 IWDG는 `Prescaler=256`, `Reload=4095`이며, 32 kHz LSI 가정 시 timeout은 약 <strong>32.8초</strong>다.
+            코드에서 refresh는 super-loop 마지막에서 매번 호출된다.
+          </p>
+          <ul class="bullets">
+            <li><strong>의미:</strong> 지금 IWDG는 safety watchdog이 아니라 마지막 reboot 장치에 가깝다</li>
+            <li><strong>문제:</strong> steering controller 관점에서 32.8초는 너무 길고, safe state 전환보다 훨씬 늦다</li>
+            <li><strong>평가:</strong> “watchdog이 있다”보다 “몇 ms 안에 SAFE가 되느냐”가 더 중요하다</li>
+          </ul>
+        </div>
+      </div>
+      <div class="grid-2" style="margin-top:18px">
+        <div class="panel">
+          <h3>Recommended Speed Target</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>목표 응답</th>
+                <th>필요 steering speed</th>
+                <th>필요 pulse rate</th>
+                <th>평가</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>45 deg in 2 s</td>
+                <td>22.5 deg/s</td>
+                <td>약 93.8 kpps</td>
+                <td>현재 10 kpps controller ceiling으로는 불가, 100 kpps pulse clamp 근처</td>
+              </tr>
+              <tr>
+                <td>45 deg in 1 s</td>
+                <td>45 deg/s</td>
+                <td>약 187.5 kpps</td>
+                <td>현재 pulse clamp 100 kpps를 넘으므로 clamp와 TIM1 설정 재검토 필요</td>
+              </tr>
+              <tr>
+                <td>현재 코드 ceiling</td>
+                <td>약 2.4 deg/s</td>
+                <td>10 kpps</td>
+                <td>bench-safe 하지만 vehicle/actuator explanation 용으로는 매우 보수적</td>
+              </tr>
+            </tbody>
+          </table>
+          <p style="margin-top:12px">
+            내 평가로는 지금은 sensor truth가 닫히기 전이라 10 kpps가 안전한 bench ceiling으로는 적절하다.
+            다만 feedback이 안정화되면 1차 목표는 <strong>30~50 kpps</strong>, 제품형 요구가 45 deg를 1~2초 안에 수행하는 수준이라면
+            최종 목표는 <strong>100 kpps 이상</strong>으로 requirement-driven tuning을 해야 한다.
+          </p>
+        </div>
+        <div class="panel">
+          <h3>Recommended Watchdog Strategy</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>계층</th>
+                <th>권장 범위</th>
+                <th>역할</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Command freshness</td>
+                <td>50~100 ms</td>
+                <td>통신 정지 시 `SAFE` 전이</td>
+              </tr>
+              <tr>
+                <td>Loop/task watchdog</td>
+                <td>10~50 ms</td>
+                <td>1 ms fast tick 정지 시 motor output inhibit</td>
+              </tr>
+              <tr>
+                <td>Hardware IWDG</td>
+                <td>100~300 ms</td>
+                <td>software fail 이후 최종 reset</td>
+              </tr>
+            </tbody>
+          </table>
+          <p style="margin-top:12px">
+            즉 ideal flow는 <strong>먼저 SAFE 전이</strong>, 그 다음 <strong>필요 시 IWDG reset</strong>이다.
+            현재처럼 32.8초 후 단순 reboot은 steering safety 설명으로는 부족하다.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Ownership Checklist For The Control Module</h2>
+      <p class="section-intro">
+        현업에서 “이 모듈을 네가 소유한다”는 말은, 아래 질문 여섯 개를 혼자 설명하고 방어할 수 있다는 뜻에 가깝다.
+        이 표는 현재 코드 기준으로 내가 어디까지 답할 수 있고, 어디가 아직 gap인지 정리한 것이다.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>질문</th>
+            <th>현재 코드 기준 답변</th>
+            <th>남은 gap</th>
+            <th>현재 evidence</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>입력과 출력 계약이 무엇인가</td>
+            <td>
+              입력은 `target_angle`, encoder angle, `dt`, safety evaluator 결과다.
+              출력은 signed pulse frequency와 emergency/relay action이다.
+            </td>
+            <td>
+              startup profile과 runtime contract가 별도 문서/타입으로 완전히 고정되진 않았다.
+            </td>
+            <td>CSV header, `PulseControl_GetStatus()`, `CommandLifecycle_t`</td>
+          </tr>
+          <tr>
+            <td>상태가 왜 READY/ACTIVE/SAFE/FAULT로 나뉘는가</td>
+            <td>
+              현재는 그렇게 구현돼 있지 않고 `CTRL_MODE_IDLE/POSITION/EMERGENCY`와 command lifecycle이 나뉘어 있다.
+            </td>
+            <td>
+              top-level supervisor state machine이 아직 없다.
+            </td>
+            <td>현재는 `CTRL_MODE_EMERGENCY`와 `CMD_FAULTED` 로그만 존재</td>
+          </tr>
+          <tr>
+            <td>각 fault가 몇 ms 누적되면 상태가 바뀌는가</td>
+            <td>
+              `REACHED`만 `0.5 deg` 범위 100 ms 유지가 있고, safety limit trip은 대부분 즉시다.
+              command timeout은 현재 `0 ms`로 사실상 꺼져 있다.
+            </td>
+            <td>
+              sensor invalid 50 ms, overcurrent 20 ms 같은 persistence window가 없다.
+            </td>
+            <td>`STABLE_TIME_MS = 100`, timeout disabled, safety trip immediate</td>
+          </tr>
+          <tr>
+            <td>SAFE와 FAULT의 차이가 무엇인가</td>
+            <td>
+              현재 코드는 둘을 분리하지 못하고, 대부분 `EMERGENCY` 또는 `FAULTED` 결과로 수렴한다.
+            </td>
+            <td>
+              보호정지와 고장정지의 정책 차이를 state와 recovery policy로 분리해야 한다.
+            </td>
+            <td>현재는 `CMD_RESULT_TIMEOUT`, `CMD_RESULT_ESTOP`, `CMD_RESULT_FAULT_*`만 존재</td>
+          </tr>
+          <tr>
+            <td>fault가 자동 복구인지 수동 reset인지</td>
+            <td>
+              현재는 latched fault가 없어서 재-enable이 비교적 쉽게 가능하다.
+            </td>
+            <td>
+              manual reset + all inputs healthy 조건을 강제하는 fault latch가 필요하다.
+            </td>
+            <td>`PositionControl_Enable()`가 `Relay_EmergencyRelease()`를 직접 호출</td>
+          </tr>
+          <tr>
+            <td>이걸 어떤 테스트로 증명했는가</td>
+            <td>
+              latency batch, bench CSV, drive monitor(`St-06`, `St-16`, `St-03`), runaway fault log가 있다.
+            </td>
+            <td>
+              formal fault injection matrix와 SAFE/FAULT recovery test는 아직 없다.
+            </td>
+            <td>putty log, control trace, latency trace, command lifecycle logs</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section">
+      <h2>Target Operating State Machine</h2>
+      <p class="section-intro">
+        아래 표는 현재 코드 그대로가 아니라, 지금 프로젝트를 제품형 steering controller로 끌고 가기 위한 목표 운영 모델이다.
+        이 구분에서 핵심은 <strong>SAFE는 보호정지</strong>, <strong>FAULT는 고장정지</strong>라는 점이다.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>현재 상태</th>
+            <th>조건</th>
+            <th>다음 상태</th>
+            <th>출력 정책</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>INIT</td>
+            <td>homing 완료, `angle_valid=1`, `estop=0`, `servo_ready=1`</td>
+            <td>READY</td>
+            <td>`motor_enable=0`</td>
+          </tr>
+          <tr>
+            <td>READY</td>
+            <td>`cmd_alive=1`, `watchdog_ok=1`, `servo_alarm=0`</td>
+            <td>ACTIVE</td>
+            <td>`motor_enable=1`</td>
+          </tr>
+          <tr>
+            <td>ACTIVE</td>
+            <td>`cmd_rx_age_ms > 100`</td>
+            <td>SAFE</td>
+            <td>`torque_limit=0`, `motor_enable=0`, `emg_assert=1`</td>
+          </tr>
+          <tr>
+            <td>ACTIVE</td>
+            <td>`angle_valid=0`가 50 ms 지속</td>
+            <td>FAULT</td>
+            <td>`motor_enable=0`, `emg_assert=1`, latched fault</td>
+          </tr>
+          <tr>
+            <td>ACTIVE</td>
+            <td>overcurrent가 20 ms 지속</td>
+            <td>FAULT 또는 SAFE</td>
+            <td>즉시 torque limit 후 정지</td>
+          </tr>
+          <tr>
+            <td>ANY</td>
+            <td>`estop_hw=1`</td>
+            <td>SAFE</td>
+            <td>즉시 정지</td>
+          </tr>
+          <tr>
+            <td>ANY</td>
+            <td>`servo_alarm=1`</td>
+            <td>FAULT</td>
+            <td>latched fault</td>
+          </tr>
+          <tr>
+            <td>SAFE / FAULT</td>
+            <td>수동 reset + 모든 입력 정상</td>
+            <td>READY</td>
+            <td>재시작 허용</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="grid-2" style="margin-top:18px">
+        <div class="panel">
+          <h3>SAFE: 보호정지</h3>
+          <ul class="bullets">
+            <li>통신 끊김, operator stop, watchdog 이상 같은 보호용 stop</li>
+            <li>원인이 외부 컨텍스트에 있고, 하드웨어 자체 고장이라고 단정되지 않음</li>
+            <li>원인이 사라지고 reset policy를 만족하면 READY 복귀 가능</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>FAULT: 고장정지</h3>
+          <ul class="bullets">
+            <li>sensor invalid, servo alarm, persistent overcurrent 같은 결함성 stop</li>
+            <li>latched fault가 되어야 하고, 원인 분석과 reset 절차가 필요함</li>
+            <li>SAFE보다 더 강한 소유권과 recovery policy를 요구함</li>
+          </ul>
+        </div>
+      </div>
+      <div class="panel" style="margin-top:18px">
+        <h3>Assessment Against Current Code</h3>
+        <p>
+          이 상태 머신은 방향성으로는 매우 적절하다. 다만 현재 코드에는 `READY/SAFE/FAULT` top-level state가 없고,
+          `angle_valid`, `servo_ready`, `servo_alarm`, `overcurrent`, `cmd_rx_age_ms` 같은 신호도 일부는 아직 직접 모델링되지 않았다.
+          따라서 이 표는 “현재 구현 설명”이 아니라 “다음 단계 설계 명세”로 넣는 것이 정확하다.
+        </p>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Roadmap To Final System</h2>
+      <div class="roadmap">
+        <div class="step">
+          <div class="phase">Phase 1</div>
+          <div>
+            <h4>External Feedback Closure</h4>
+            <p>브레드보드 기반 encoder interface를 안정화하고, AO/BO -> level shifter -> TIM2 체인을 확정한다. 프로브 연결 시 runaway가 발생하지 않는 기준 상태를 먼저 만든다.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="phase">Phase 2</div>
+          <div>
+            <h4>Startup Contract And Fault Latch</h4>
+            <p>현재의 bench auto-enable 경로를 정식 startup contract로 바꾸고, emergency / limit / timeout / sensor plausibility에 대한 latched fault policy를 단일 owner에서 관리한다.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="phase">Phase 3</div>
+          <div>
+            <h4>Production-Style Diagnostics</h4>
+            <p>blocking UART 대신 async logging path를 도입하고, fault history, runtime statistics, command trace를 제품형 진단 구조로 정리한다.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="phase">Phase 4</div>
+          <div>
+            <h4>Closed-Loop Steering Node</h4>
+            <p>validated sensor truth, homing, startup sequencing, communication fail-safe까지 포함한 steering sub-controller를 완성해 상위 자율주행 스택과 안정적으로 연동한다.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Final Goal</h2>
+      <div class="grid-2">
+        <div class="panel">
+          <h3>Target System Definition</h3>
+          <ul class="bullets">
+            <li>상위 제어기에서 받은 조향 명령을 받아 안전하게 steering motion으로 변환</li>
+            <li>sensor truth가 검증된 closed-loop position control</li>
+            <li>startup readiness, homing, fault latch, reset policy가 명확한 state machine</li>
+            <li>latency, command lifecycle, safety trip을 증거로 남기는 diagnosable runtime</li>
+            <li>연구용 bench를 넘어 실제 시스템 통합에 쓸 수 있는 서브컨트롤러</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>What this portfolio demonstrates</h3>
+          <ul class="bullets">
+            <li>펌웨어를 “동작”과 “증거” 관점으로 동시에 구축한 경험</li>
+            <li>control, runtime, diagnostics, safety를 코드 구조로 분리한 설계 감각</li>
+            <li>하드웨어-펌웨어 경계에서 문제를 좁혀 가는 bring-up discipline</li>
+            <li>미완성 상태에서도 현재 가치를 정직하게 설명하는 기술 문서화 능력</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <div class="footer">
+      Portfolio snapshot generated from local project documentation, runtime logs, and bench evidence.
+      Source references: README, REQ guide, steering portal, putty log plots, and recent bench CSV excerpts.
+    </div>
+  </div>
+</body>
+</html>

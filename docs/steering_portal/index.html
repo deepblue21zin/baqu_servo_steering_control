@@ -17,7 +17,7 @@
           아키텍처, 동작 방식, 증거, 다음 개발 방향을 한 번에 이해하도록 정리한 로컬 설명 포털이다.
         </p>
         <p class="baseline">
-          Current baseline: no-homing command lifecycle runtime + `putty.log` + `26-03-15_0935`, Doxygen snapshot, runtime code on `feature/position_control`
+          Current baseline: 2026-03-25 runtime with `main.c -> app_runtime.c` split, `position_control_diag.c` split, encoder unwrap count, and current bench note `P-RUN / P4-00=2 / St-06=0`
         </p>
       </div>
 
@@ -32,6 +32,7 @@
         <button type="button" class="nav-link" data-target="issues">현재 문제</button>
         <button type="button" class="nav-link" data-target="reqs">앞으로 구현할 REQ</button>
         <button type="button" class="nav-link" data-target="team">팀원 6명 분배</button>
+        <button type="button" class="nav-link" data-target="atlas">런타임 맵 / 역할 요약</button>
         <button type="button" class="nav-link" data-target="code">코드 탐색</button>
         <button type="button" class="nav-link" data-target="links">Doxygen / 코드 브라우저</button>
       </nav>
@@ -73,7 +74,7 @@
               </div>
               <div class="metric-box">
                 <span class="metric-label">Gear Ratio</span>
-                <strong>12 : 1</strong>
+                <strong>12.5 : 1</strong>
               </div>
               <div class="metric-box">
                 <span class="metric-label">Control Range</span>
@@ -81,12 +82,12 @@
               </div>
             </div>
             <div class="spec-note">
-              <p><strong>12:1 기어비 기준</strong></p>
+              <p><strong>12.5:1 기어비 기준</strong></p>
               <ul class="plain-list">
-                <li>1 steering deg = 12 motor deg</li>
-                <li>1 steering deg = 1600 encoder count</li>
-                <li>1 steering deg = 4000 pulse</li>
-                <li>45 steering deg = 540 motor deg = 72000 count = 180000 pulse</li>
+                <li>1 steering deg = 12.5 motor deg</li>
+                <li>1 steering deg = 1666.67 encoder count</li>
+                <li>1 steering deg = 4166.67 pulse</li>
+                <li>45 steering deg = 562.5 motor deg = 75000 count = 187500 pulse</li>
               </ul>
             </div>
           </article>
@@ -99,13 +100,13 @@
           <div class="flow-arrow">UDP / steering_deg</div>
           <div class="flow-node">ethernet_communication.c</div>
           <div class="flow-arrow">mode + target + misc</div>
-          <div class="flow-node">main.c Scheduler</div>
+          <div class="flow-node">main.c boot<br>+ app_runtime.c</div>
           <div class="flow-arrow">1ms interrupt_flag</div>
           <div class="flow-node accent">position_control.c</div>
           <div class="flow-arrow">signed pulse_hz</div>
           <div class="flow-node">pulse_control.c</div>
           <div class="flow-arrow">PF / PR differential</div>
-          <div class="flow-node accent">L7 Driver + Motor + 12:1 Steering</div>
+          <div class="flow-node accent">L7 Driver + Motor + 12.5:1 Steering</div>
         </div>
       </section>
 
@@ -114,8 +115,8 @@
           <p class="eyebrow">Conceptual Model</p>
           <h2>목표에 부합하는 동적 시뮬레이션</h2>
           <p class="section-copy">
-            아래 시뮬레이션은 <strong>설명용 모델</strong>이다. 현재 실측 로그와 분리해서,
-            목표 조향각이 들어왔을 때 이상적인 fixed-speed move가 어떤 양으로 움직여야 하는지 보여준다.
+            아래 시뮬레이션은 <strong>현재 코드 계약을 기준으로 한 설명용 모델</strong>이다.
+            실제 bench closure와 분리해서, 현재 firmware clamp 안에서 목표 조향각이 어떤 양으로 변환되는지 보여준다.
           </p>
         </div>
 
@@ -131,9 +132,9 @@
 
             <label class="control-label" for="freq-slider">
               Fixed pulse frequency
-              <span id="freq-readout">100000 Hz</span>
+              <span id="freq-readout">10000 Hz</span>
             </label>
-            <input id="freq-slider" type="range" min="10000" max="500000" step="5000" value="100000">
+            <input id="freq-slider" type="range" min="10" max="100000" step="100" value="10000">
 
             <div class="sim-actions">
               <button type="button" id="replay-sim" class="sim-button">0 deg에서 다시 재생</button>
@@ -147,24 +148,24 @@
             <div class="metric-grid sim-metrics">
               <div class="metric-box">
                 <span class="metric-label">Motor target</span>
-                <strong id="motor-target-value">180 deg</strong>
+                <strong id="motor-target-value">188 deg</strong>
               </div>
               <div class="metric-box">
                 <span class="metric-label">Encoder count</span>
-                <strong id="encoder-target-value">24000</strong>
+                <strong id="encoder-target-value">25000</strong>
               </div>
               <div class="metric-box">
                 <span class="metric-label">Pulse budget</span>
-                <strong id="pulse-target-value">60000</strong>
+                <strong id="pulse-target-value">62500</strong>
               </div>
               <div class="metric-box">
                 <span class="metric-label">Ideal move time</span>
-                <strong id="time-target-value">0.60 s</strong>
+                <strong id="time-target-value">6.25 s</strong>
               </div>
             </div>
 
             <div class="status-banner" id="freq-status">
-              현재 firmware clamp는 100000 Hz다. 100000 Hz 초과는 설계 목표일 뿐, 현재 코드로는 그대로 재현되지 않는다.
+              현재 firmware contract는 10 ~ 100000 Hz clamp와 1 ms reverse guard를 가진다.
             </div>
           </article>
 
@@ -185,7 +186,7 @@
                   <div class="dial-target motor-target" id="motor-target-marker"></div>
                   <div class="dial-needle motor-needle" id="motor-needle"></div>
                 </div>
-                <p id="motor-caption" class="dial-caption">Target +180 deg / Current 0 deg</p>
+                <p id="motor-caption" class="dial-caption">Target +187.5 deg / Current 0 deg</p>
               </div>
             </div>
 
@@ -224,13 +225,13 @@
             <tbody>
               <tr>
                 <td>`ethernet_communication.c`</td>
-                <td>`main.c`</td>
+                <td>`app_runtime.c`</td>
                 <td>`AutoDrive_Packet_t.steering_angle`</td>
                 <td>`float`</td>
                 <td>`steering_deg`, clamp `[-45, +45]`</td>
               </tr>
               <tr>
-                <td>`main.c`</td>
+                <td>`app_runtime.c`</td>
                 <td>`position_control.c`</td>
                 <td>target</td>
                 <td>`float`</td>
@@ -258,7 +259,7 @@
                 <td>latched fail-safe event + reason code</td>
               </tr>
               <tr>
-                <td>`main.c` / `position_control.c`</td>
+                <td>`app_runtime.c` / `position_control_diag.c`</td>
                 <td>UART / plots / CubeMonitor</td>
                 <td>`CSV`, `LATENCY_STAGE`, `dbg_*`</td>
                 <td>text + global vars</td>
@@ -323,7 +324,7 @@
         <div class="status-grid">
           <article class="status-card done">
             <h3>Runtime skeleton</h3>
-            <p>`main.c` 1ms scheduler, `PositionControl_Update()`, watchdog refresh, keyboard bench mode</p>
+            <p>`main.c`는 얇은 부트 진입점으로 남기고, `app_runtime.c`가 startup, 1ms service, watchdog, keyboard bench를 담당한다.</p>
             <span class="state-tag">implemented</span>
           </article>
           <article class="status-card done">
@@ -343,17 +344,17 @@
           </article>
           <article class="status-card partial">
             <h3>Closed-loop tracking proof</h3>
-            <p>코드 구조는 존재하지만 latest logs에서 encoder/current가 움직이지 않아 실증은 미완료</p>
+            <p>손으로 축을 돌릴 때 TIM4 count는 변하고 PE9 pulse도 확인됐지만, current bench에서는 드라이브 `St-06=0`이라 commanded motion closure가 미완료다.</p>
             <span class="state-tag">partial</span>
           </article>
           <article class="status-card partial">
             <h3>Homing and startup</h3>
-            <p>`homing.c`와 `adc_potentiometer.c`는 존재하지만 실제 startup state machine에는 미통합</p>
+            <p>`homing.c`와 `adc_potentiometer.c`는 존재하지만 실제 startup gating과 readiness contract에는 아직 미통합이다.</p>
             <span class="state-tag">partial</span>
           </article>
           <article class="status-card risk">
             <h3>System readiness contract</h3>
-            <p>boot-time auto-enable, fault latch, unwrap, encoder-ADC cross-check contract가 아직 없다. reached/timeout/abort lifecycle는 1차 반영됨</p>
+            <p>boot-time auto-enable, fault latch, encoder-ADC cross-check, stale sensor contract가 아직 없다. reached/timeout/abort lifecycle와 encoder unwrap은 반영된 상태다.</p>
             <span class="state-tag">gap</span>
           </article>
         </div>
@@ -364,8 +365,8 @@
           <p class="eyebrow">Measured Evidence</p>
           <h2>로그 기록, 시각화, 그리고 해석 방법</h2>
           <p class="section-copy">
-            이 섹션은 <strong>실측 로그 기반</strong>이다. 아래 해석은 `putty.log`, `26-03-15_0935`,
-            `plot_putty_log.py`, 생성된 PNG를 기준으로 작성했다.
+            이 섹션은 <strong>historical latency evidence + latest bench 관찰</strong>를 함께 보여준다.
+            현재 핵심 해석은 CSV, command lifecycle, pulse status, drive monitor를 한 프레임으로 보는 것이다.
           </p>
         </div>
 
@@ -377,7 +378,7 @@
             </div>
             <svg id="actual-trace" viewBox="0 0 640 260" class="trace-svg" aria-label="Measured steering response chart"></svg>
             <p class="caption">
-              실제 latest run에서는 target은 바뀌지만 `current_deg`가 0 부근에 고정되고 `enc_raw`가 한 값으로만 남는다.
+              최근 bench에서는 target과 output은 변하지만 drive `St-06=0` 상태가 유지돼 motion closure가 아직 닫히지 않는다.
             </p>
             <img class="plot-image" src="../../putty_log/plots/control_trace.png" alt="Control trace plot generated from PuTTY log">
           </article>
@@ -396,11 +397,11 @@
           <article class="card">
             <h3>현재 로그에서 확인되는 사실</h3>
             <ul class="plain-list">
-              <li>control samples 154개에서 `enc_raw` unique 값이 1개뿐이라 current feedback path가 검증되지 않았다.</li>
-              <li>대신 `CMD_START/REACHED/TIMEOUT/ABORT/FAULT` 이벤트가 추가되어 명령 단위 추적 기반은 갖춰졌다.</li>
-              <li>`DIR`은 로그상 0/1로 변하므로 MCU 내부 direction GPIO는 바뀌고 있다.</li>
-              <li>latency는 대체로 낮지만 interactive logging 구간에서 Comms max가 12 ms 이상 튀는 outlier가 있다.</li>
-              <li>deadline miss는 전체 220 batch 중 non-zero batch가 존재하므로 strict real-time claim에는 조건 설명이 필요하다.</li>
+              <li>`EncoderReader_GetCount()`는 이제 centered raw가 아니라 누적 `unwrap` count를 사용한다.</li>
+              <li>CSV에는 `enc_cnt`, `enc_raw`, `req_hz`, `applied_hz`, `out_active`, `rev_guard`, `cmd_id/state/result`가 함께 남는다.</li>
+              <li>최근 bench에서는 손으로 축을 돌릴 때 TIM4 count가 변하므로 encoder input chain 자체는 일부 확인됐다.</li>
+              <li>반면 drive monitor `St-06=0`, `St-04` 정지 상태라 command pulse recognition closure는 아직 없다.</li>
+              <li>latency evidence는 유효하지만 strict timing 분석 시 blocking UART logging 조건을 분리해서 해석해야 한다.</li>
             </ul>
           </article>
 
@@ -457,12 +458,12 @@
 
         <div class="issue-grid">
           <article class="issue-card critical">
-            <h3>P0. Encoder feedback stuck</h3>
+            <h3>P0. Drive command pulse not counted</h3>
             <p>
-              latest measured logs에서 `enc_raw`가 `32769`로 고정된다.
-              따라서 현재 상태는 “closed-loop steering validated”라고 부를 수 없다.
+              현재 bench에서는 `P-RUN`, `P4-00=2`, `PE9` pulse 확인에도 불구하고 드라이브 `St-06=0`, `St-04` 정지 상태가 남아 있다.
+              따라서 현재 가장 큰 병목은 drive-side pulse recognition closure다.
             </p>
-            <span class="evidence">Evidence: unique encoder values = 1</span>
+            <span class="evidence">Evidence: `St-06 = 0`, `St-04` static</span>
           </article>
 
           <article class="issue-card warning">
@@ -475,39 +476,37 @@
           </article>
 
           <article class="issue-card warning">
-            <h3>P1. 16-bit unwrap missing</h3>
+            <h3>P1. Startup auto-enable remains</h3>
             <p>
-              `±45 deg steering`를 커버하려면 `±72000 count`가 필요한데,
-              현재 centered 16-bit raw 방식은 full range 보장이 어렵다.
+              현재 `AppRuntime_Init()`는 startup 후 `EncoderReader_Reset()`, target 0도 설정, `PositionControl_Enable()`까지 자동 진행한다.
+              제품 관점의 readiness gate와는 아직 거리가 있다.
             </p>
-            <span class="evidence">Need: accum_count / wrap tracking</span>
+            <span class="evidence">Need: INIT -> READY -> ARMED -> RUN contract</span>
           </article>
 
           <article class="issue-card warning">
-            <h3>P1. Boot-time auto enable</h3>
+            <h3>P1. Pulse contract mismatch</h3>
             <p>
-              main runtime에서 homing/state validation 없이 enable까지 자동 진행되어
-              startup safety 설명이 약하다.
-            </p>
-            <span class="evidence">Need: startup state machine + arm contract</span>
-          </article>
-
-          <article class="issue-card warning">
-            <h3>P1. Output capability mismatch</h3>
-            <p>
-              constants에는 1 MHz가 있지만 실제 `pulse_control.c`는 100 kHz clamp,
-              bench discussion에서는 500 kHz fixed move를 원한다. 계약을 하나로 정리해야 한다.
+              `constants.h`에는 1 MHz가 남아 있지만 실제 `pulse_control.c`는 100 kHz clamp와 1 ms reverse guard를 사용한다.
+              설계 상수와 현재 런타임 계약을 하나로 정리해야 한다.
             </p>
             <span class="evidence">Need: single actuator contract</span>
           </article>
 
-          <article class="issue-card advisory">
-            <h3>P2. Fail-safe traceability gap</h3>
+          <article class="issue-card warning">
+            <h3>P1. Fault latch and sensor cross-check missing</h3>
             <p>
-              ESTOP, comm timeout, sensor fault, startup inhibit, recovery clear 조건이
-              fault taxonomy와 event log로 완전히 묶여 있지 않다.
+              encoder unwrap은 들어갔지만 stale sensor, wrong-direction, encoder-ADC cross-check, latched clear policy는 아직 정식 fault taxonomy로 닫히지 않았다.
             </p>
-            <span class="evidence">Need: latched fault + clear policy + timestamps</span>
+            <span class="evidence">Need: richer fault reason + clear policy</span>
+          </article>
+
+          <article class="issue-card advisory">
+            <h3>P2. Blocking UART logging</h3>
+            <p>
+              현재 UART CSV와 bench 로그는 blocking path라 strict timing 검증과 motion bring-up 테스트를 분리해서 봐야 한다.
+            </p>
+            <span class="evidence">Need: async UART DMA + ring buffer</span>
           </article>
         </div>
       </section>
@@ -532,6 +531,21 @@
           </p>
         </div>
         <div id="team-grid" class="team-grid"></div>
+      </section>
+
+      <section id="atlas" class="panel">
+        <div class="section-head">
+          <p class="eyebrow">Runtime Atlas</p>
+          <h2>파일별 역할, 받는 정보, 보내는 정보, 핵심 함수와 변수</h2>
+          <p class="section-copy">
+            새로 분리된 `main.c`, `app_runtime.c`, `position_control_diag.c`를 포함해 현재 runtime을
+            파일 단위로 다시 푼 지도다. 각 카드에서 어떤 정보를 받아서 어디로 보내는지,
+            그리고 어떤 함수와 상태 변수가 핵심인지 한눈에 보이도록 구성했다.
+          </p>
+        </div>
+
+        <div id="runtime-flow" class="runtime-flow"></div>
+        <div id="runtime-atlas-grid" class="runtime-atlas-grid"></div>
       </section>
 
       <section id="code" class="panel">
@@ -563,7 +577,7 @@
         <div class="link-grid">
           <a class="link-card" href="../doxygen/html/index.html">
             <strong>Doxygen Runtime Portal</strong>
-            <span>README, include graph, call graph, source browser</span>
+            <span>README + runtime atlas + source browser</span>
           </a>
           <a class="link-card" href="../doxygen/html/files.html">
             <strong>Full Code Browser</strong>
