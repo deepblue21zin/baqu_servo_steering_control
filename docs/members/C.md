@@ -145,21 +145,521 @@
 ## 5. C 파트 REQ 초안
 
 - `REQ-C-001`: 엔코더는 16비트 wrap을 고려한 `accum_count`를 제공해야 한다.
+<!--
+구현 방향:
+- TIM4 raw counter의 직전값을 저장하고, 현재 raw와의 차이를 int16_t로 해석해 wrap을 자동 보정한다.
+- 누적값은 int32_t 또는 int64_t accum_count로 별도 유지한다.
+
+예시 코드:
+typedef struct {
+    uint16_t prev_raw_count;
+    int32_t delta_count;
+    int64_t accum_count;
+    int32_t offset_count;
+} EncoderReader_State_t;
+
+static EncoderReader_State_t g_encoder;
+
+static void EncoderReader_UpdateCounts(void)
+{
+    uint16_t raw = __HAL_TIM_GET_COUNTER(&htim4);
+    int16_t signed_delta = (int16_t)(raw - g_encoder.prev_raw_count);
+
+    g_encoder.delta_count = (int32_t)signed_delta;
+    g_encoder.accum_count += (int32_t)signed_delta;
+    g_encoder.prev_raw_count = raw;
+}
+-->
 - `REQ-C-002`: 엔코더 API는 최소한 `raw_count`, `delta_count`, `accum_count`, `motor_deg`를 설명 가능해야 한다.
+<!--
+구현 방향:
+- angle만 반환하지 말고 샘플 구조체 전체를 조회하는 API를 만든다.
+- PositionControl은 motor_deg만 써도 되지만, 진단과 로그는 raw/delta/accum을 함께 본다.
+
+예시 코드:
+typedef struct {
+    uint16_t raw_count;
+    int32_t delta_count;
+    int64_t accum_count;
+    float motor_deg;
+    uint32_t age_ms;
+    uint32_t sample_tick_ms;
+} EncoderSample_t;
+
+bool EncoderReader_GetSample(EncoderSample_t *out_sample)
+{
+    if ((out_sample == NULL) || (g_encoder.initialized == 0U)) {
+        return false;
+    }
+
+    out_sample->raw_count = g_encoder.raw_count;
+    out_sample->delta_count = g_encoder.delta_count;
+    out_sample->accum_count = g_encoder.accum_count - g_encoder.offset_count;
+    out_sample->motor_deg = (float)(out_sample->accum_count) * ENCODER_DEG_PER_COUNT;
+    out_sample->sample_tick_ms = g_encoder.sample_tick_ms;
+    out_sample->age_ms = HAL_GetTick() - g_encoder.sample_tick_ms;
+    return true;
+}
+-->
 - `REQ-C-003`: ADC API는 `raw`, `voltage`, `calibrated_angle`, `validity`를 함께 제공해야 한다.
+<!--
+구현 방향:
+- ADC도 단순 getter 여러 개 대신 샘플 구조체를 만들고 validity/fault bits를 포함한다.
+- angle은 calibration 파라미터를 거친 calibrated_angle으로 명시한다.
+
+예시 코드:
+typedef enum {
+    ADC_POT_VALID = 0x00,
+    ADC_POT_INVALID_NOT_INIT = 0x01,
+    ADC_POT_INVALID_DISCONNECT = 0x02,
+    ADC_POT_INVALID_TIMEOUT = 0x04,
+    ADC_POT_INVALID_STUCK = 0x08,
+    ADC_POT_INVALID_JUMP = 0x10,
+    ADC_POT_INVALID_RANGE = 0x20
+} ADC_PotValidity_t;
+
+typedef struct {
+    uint16_t raw;
+    float voltage;
+    float calibrated_angle_deg;
+    uint32_t sample_tick_ms;
+    uint32_t age_ms;
+    uint32_t validity;
+} ADC_PotSample_t;
+
+bool ADC_Pot_GetSample(ADC_PotSample_t *out_sample)
+{
+    uint16_t raw = 0U;
+
+    if ((out_sample == NULL) || !ADC_Pot_GetRawNonBlocking(&raw)) {
+        return false;
+    }
+
+    out_sample->raw = raw;
+    out_sample->voltage = (float)raw * ADC_VREF / ADC_MAX_COUNT;
+    out_sample->calibrated_angle_deg = ADC_Pot_ConvertRawToAngle(raw);
+    out_sample->sample_tick_ms = HAL_GetTick();
+    out_sample->age_ms = 0U;
+    out_sample->validity = ADC_Pot_EvaluateValidity(raw);
+    return (out_sample->validity == ADC_POT_VALID);
+}
+-->
 - `REQ-C-004`: ADC는 disconnect, out-of-range, jump, stuck fault를 진단해야 한다.
+<!--
+구현 방향:
+- 최근 raw/history를 저장하고 임계값 기반 fault를 누적 판정한다.
+- 단발성 노이즈와 실제 fault를 구분하려면 연속 N회 조건을 둔다.
+
+예시 코드:
+typedef struct {
+    uint16_t prev_raw;
+    uint16_t same_count;
+    uint16_t jump_count;
+    uint16_t jump_threshold_raw;
+    uint16_t jump_persist_count;
+    uint16_t stuck_threshold_count;
+    uint16_t disconnect_low_raw;
+    uint16_t disconnect_high_raw;
+    uint16_t valid_min_raw;
+    uint16_t valid_max_raw;
+} ADC_PotDiag_t;
+
+static uint32_t ADC_Pot_EvaluateValidity(uint16_t raw)
+{
+    uint32_t flags = ADC_POT_VALID;
+    uint16_t diff = (raw > g_pot_diag.prev_raw) ? (raw - g_pot_diag.prev_raw) : (g_pot_diag.prev_raw - raw);
+
+    if ((raw <= g_pot_diag.disconnect_low_raw) || (raw >= g_pot_diag.disconnect_high_raw)) {
+        flags |= ADC_POT_INVALID_DISCONNECT;
+    } else if ((raw < g_pot_diag.valid_min_raw) || (raw > g_pot_diag.valid_max_raw)) {
+        flags |= ADC_POT_INVALID_RANGE;
+    }
+    if (diff > g_pot_diag.jump_threshold_raw) {
+        if (++g_pot_diag.jump_count >= g_pot_diag.jump_persist_count) {
+            flags |= ADC_POT_INVALID_JUMP;
+        }
+    } else {
+        g_pot_diag.jump_count = 0U;
+    }
+    if (raw == g_pot_diag.prev_raw) {
+        g_pot_diag.same_count++;
+        if (g_pot_diag.same_count >= g_pot_diag.stuck_threshold_count) {
+            flags |= ADC_POT_INVALID_STUCK;
+        }
+    } else {
+        g_pot_diag.same_count = 0U;
+    }
+
+    g_pot_diag.prev_raw = raw;
+    return flags;
+}
+-->
 - `REQ-C-005`: 엔코더와 ADC는 homing 시점과 runtime 시점에 각각 어떤 센서를 기준으로 삼는지 정책이 있어야 한다.
+<!--
+구현 방향:
+- homing과 runtime의 기준센서를 enum으로 고정하고, 상태머신에서만 선택한다.
+- 예: homing은 ADC absolute 기준, runtime은 encoder tracking 기준, fault 시 ADC cross-check만 사용.
+
+예시 코드:
+typedef enum {
+    SENSOR_REF_NONE = 0,
+    SENSOR_REF_ADC_ABSOLUTE,
+    SENSOR_REF_ENCODER_INCREMENTAL
+} SensorReference_t;
+
+typedef struct {
+    SensorReference_t homing_reference;
+    SensorReference_t runtime_reference;
+    SensorReference_t fallback_reference;
+} SensorPolicy_t;
+
+static const SensorPolicy_t g_sensor_policy = {
+    .homing_reference = SENSOR_REF_ADC_ABSOLUTE,
+    .runtime_reference = SENSOR_REF_ENCODER_INCREMENTAL,
+    .fallback_reference = SENSOR_REF_ADC_ABSOLUTE
+};
+-->
 - `REQ-C-006`: gear ratio, deg per count, pulse per deg, pot angle range는 단일 상수 헤더에서 관리해야 한다.
+<!--
+구현 방향:
+- constants.h 또는 sensor_constants.h에 센서/구동/축변환 상수를 일원화한다.
+- adc_potentiometer.c 내부 기본값(-90~90) 같은 매직넘버를 제거한다.
+
+예시 코드:
+#ifndef SENSOR_CONSTANTS_H
+#define SENSOR_CONSTANTS_H
+
+#define POT_MIN_ANGLE_DEG             (-45.0f)
+#define POT_MAX_ANGLE_DEG             (45.0f)
+#define ADC_VREF                      3.3f
+#define ADC_MAX_COUNT                 4095.0f
+
+#endif
+-->
 - `REQ-C-007`: 센서 API는 blocking call이 1ms 제어 루프를 방해하지 않도록 설계돼야 한다.
+<!--
+구현 방향:
+- HAL_ADC_PollForConversion(..., 100)와 HAL_Delay(3000)는 제어 루프 경로에서 제거해야 한다.
+- ADC는 DMA/interrupt/background start 방식으로 최신 샘플만 읽고, calibration은 setup 상태에서만 수행한다.
+
+예시 코드:
+static volatile uint16_t g_adc_latest_raw;
+static volatile uint8_t g_adc_data_ready;
+
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
+{
+    if (hadc == &hadc1) {
+        g_adc_latest_raw = (uint16_t)HAL_ADC_GetValue(hadc);
+        g_adc_data_ready = 1U;
+    }
+}
+
+bool ADC_Pot_GetRawNonBlocking(uint16_t *out_raw)
+{
+    if ((out_raw == NULL) || (g_adc_data_ready == 0U)) {
+        return false;
+    }
+    *out_raw = g_adc_latest_raw;
+    return true;
+}
+-->
 - `REQ-C-008`: 센서 변환 결과는 코드와 문서에서 같은 단위를 써야 한다.
+<!--
+구현 방향:
+- 변수명에 motor_deg / steering_deg를 명시하고, API/로그/문서가 같은 이름을 사용하게 맞춘다.
+- EncoderReader_GetAngleDeg() 같은 모호한 이름보다 EncoderReader_GetMotorDeg()가 안전하다.
+
+예시 코드:
+float EncoderReader_GetMotorDeg(void);
+float SensorModel_ConvertPotRawToSteeringDeg(uint16_t raw);
+
+// 문서 표기 예시:
+// encoder.accum_count -> motor_deg -> steering_deg
+-->
 - `REQ-C-009`: 엔코더-ADC 차이를 이용한 cross-check 진단 로직이 있어야 한다.
+<!--
+구현 방향:
+- runtime에서 encoder motor_deg를 steering_deg로 환산한 뒤 ADC absolute steering_deg와 비교한다.
+- 차이가 일정 임계값을 넘는 상태가 연속 유지되면 warning -> fault로 승격한다.
+
+예시 코드:
+typedef struct {
+    float warn_threshold_deg;
+    float fault_threshold_deg;
+    uint16_t warn_persist_count;
+    uint16_t fault_persist_count;
+    uint16_t warn_count;
+    uint16_t mismatch_count;
+} SensorCrossCheck_t;
+
+static SensorCrossCheck_t g_cross_check = { 2.0f, 5.0f, 3U, 10U, 0U, 0U };
+
+uint32_t Sensor_CheckCrossMismatch(float encoder_steering_deg, float adc_steering_deg)
+{
+    float diff = fabsf(encoder_steering_deg - adc_steering_deg);
+
+    if (diff > g_cross_check.warn_threshold_deg) {
+        if (++g_cross_check.warn_count >= g_cross_check.warn_persist_count) {
+            SensorWarn_Raise(SENSOR_WARN_CROSSCHECK_DRIFT);
+        }
+    } else {
+        g_cross_check.warn_count = 0U;
+    }
+
+    if (diff > g_cross_check.fault_threshold_deg) {
+        if (++g_cross_check.mismatch_count >= g_cross_check.fault_persist_count) {
+            return SENSOR_FAULT_CROSSCHECK_MISMATCH;
+        }
+    } else {
+        g_cross_check.mismatch_count = 0U;
+    }
+
+    return SENSOR_FAULT_NONE;
+}
+-->
 - `REQ-C-010`: 센서 fault는 fault code와 복귀 조건을 함께 제공해야 한다.
+<!--
+구현 방향:
+- uint8_t fault_flag 대신 enum fault code와 clear 조건 함수를 만든다.
+- fault 발생 조건과 clear 조건을 문서/코드에 같이 적는다.
+
+예시 코드:
+typedef enum {
+    SENSOR_FAULT_NONE = 0,
+    SENSOR_FAULT_ADC_TIMEOUT,
+    SENSOR_FAULT_ADC_RANGE,
+    SENSOR_FAULT_ADC_STUCK,
+    SENSOR_FAULT_ENCODER_STALE,
+    SENSOR_FAULT_CROSSCHECK_MISMATCH,
+    SENSOR_FAULT_IMPLAUSIBLE_VELOCITY
+} SensorFaultCode_t;
+
+typedef struct {
+    SensorFaultCode_t code;
+    uint8_t latched;
+    uint32_t detected_tick_ms;
+    uint32_t clear_after_ms;
+} SensorFault_t;
+
+bool SensorFault_CanClear(const SensorFault_t *fault, uint32_t now_ms)
+{
+    return (fault->latched != 0U) && ((now_ms - fault->detected_tick_ms) >= fault->clear_after_ms);
+}
+-->
 - `REQ-C-011`: 모든 센서 샘플은 timestamp 또는 age 정보와 함께 제공되어 freshness를 판단할 수 있어야 한다.
+<!--
+구현 방향:
+- encoder/adc sample 구조체에 sample_tick_ms와 age_ms를 넣는다.
+- 제어기에서는 age가 기준값보다 크면 stale sensor fault를 발생시킨다.
+
+예시 코드:
+bool SensorSample_IsFresh(uint32_t sample_tick_ms, uint32_t max_age_ms)
+{
+    uint32_t now_ms = HAL_GetTick();
+    return ((now_ms - sample_tick_ms) <= max_age_ms);
+}
+
+if (!SensorSample_IsFresh(enc.sample_tick_ms, 5U)) {
+    sensor_fault.code = SENSOR_FAULT_ENCODER_STALE;
+}
+-->
 - `REQ-C-012`: 엔코더는 velocity estimate를 제공해야 하며, implausible velocity/acceleration을 fault 또는 warning으로 진단해야 한다.
+<!--
+구현 방향:
+- delta_count / dt로 velocity를 구하고, 현재속도와 이전속도의 차이로 acceleration을 계산한다.
+- 기계 한계를 넘는 값은 warning 또는 fault로 기록한다.
+
+예시 코드:
+typedef struct {
+    float velocity_deg_s;
+    float acceleration_deg_s2;
+} EncoderKinematics_t;
+
+static float g_prev_velocity_deg_s;
+
+static void EncoderReader_UpdateKinematics(float dt_s, EncoderKinematics_t *out_kin)
+{
+    if ((out_kin == NULL) || (dt_s <= 0.0f)) {
+        return;
+    }
+
+    out_kin->velocity_deg_s = ((float)g_encoder.delta_count * DEG_PER_COUNT) / dt_s;
+    out_kin->acceleration_deg_s2 = (out_kin->velocity_deg_s - g_prev_velocity_deg_s) / dt_s;
+    g_prev_velocity_deg_s = out_kin->velocity_deg_s;
+
+    if (fabsf(out_kin->velocity_deg_s) > ENCODER_MAX_VELOCITY_DEG_S) {
+        SensorFault_Raise(SENSOR_FAULT_IMPLAUSIBLE_VELOCITY);
+    } else if (fabsf(out_kin->acceleration_deg_s2) > ENCODER_MAX_ACCEL_DEG_S2) {
+        SensorWarn_Raise(SENSOR_WARN_IMPLAUSIBLE_ACCELERATION);
+    }
+}
+-->
 - `REQ-C-013`: homing에 쓰는 ADC angle이 `steering_deg`인지 `motor_deg`인지 명시하고, gear/linkage 변환식을 코드와 문서에서 동일하게 유지해야 한다.
+<!--
+구현 방향:
+- ADC는 absolute steering sensor로 정의할지, motor-side sensor로 정의할지 먼저 고정한다.
+- 아래 예시는 ADC가 steering_deg를 준다고 가정하고, homing 직전에 motor_deg로 변환해 offset을 맞추는 방식이다.
+
+예시 코드:
+int Homing_FindZero(void)
+{
+    ADC_PotSample_t adc_sample;
+    float steering_deg;
+    float motor_deg;
+    int32_t offset_count;
+
+    ADC_Pot_GetSample(&adc_sample);
+    steering_deg = adc_sample.calibrated_angle_deg;
+    motor_deg = SteeringDegToMotorDeg(steering_deg);
+    offset_count = (int32_t)(motor_deg / ENCODER_DEG_PER_COUNT);
+
+    EncoderReader_Reset();
+    EncoderReader_SetOffset(offset_count);
+    return 0;
+}
+-->
 - `REQ-C-014`: calibration 데이터는 version, range, checksum 또는 동등한 무결성 정보를 포함해 재부팅 후에도 복원 가능해야 한다.
+<!--
+구현 방향:
+- calibration 파라미터를 구조체로 만들고 flash/EEPROM/백업영역에 저장한다.
+- 부팅 시 version/checksum 검증 후 복원 실패하면 defaults + invalid flag로 시작한다.
+
+예시 코드:
+typedef struct {
+    uint32_t version;
+    uint16_t min_raw;
+    uint16_t max_raw;
+    float min_angle_deg;
+    float max_angle_deg;
+    uint32_t checksum;
+} ADC_PotCalibration_t;
+
+static uint32_t Calibration_Crc32Step(uint32_t crc, uint8_t data)
+{
+    uint32_t i = 0U;
+
+    crc ^= data;
+    for (i = 0U; i < 8U; i++) {
+        crc = (crc & 1U) ? ((crc >> 1) ^ 0xEDB88320U) : (crc >> 1);
+    }
+
+    return crc;
+}
+
+static uint32_t Calibration_CalcChecksum(const ADC_PotCalibration_t *cal)
+{
+    const uint8_t *bytes = (const uint8_t *)cal;
+    uint32_t crc = 0xFFFFFFFFU;
+    size_t i = 0U;
+
+    for (i = 0U; i < (sizeof(*cal) - sizeof(cal->checksum)); i++) {
+        crc = Calibration_Crc32Step(crc, bytes[i]);
+    }
+
+    return ~crc;
+}
+
+bool ADC_Pot_ValidateCalibration(const ADC_PotCalibration_t *cal)
+{
+    if (cal == NULL) {
+        return false;
+    }
+    if (cal->version != ADC_POT_CAL_VERSION) {
+        return false;
+    }
+    if (cal->min_raw >= cal->max_raw) {
+        return false;
+    }
+    if (cal->checksum != Calibration_CalcChecksum(cal)) {
+        return false;
+    }
+
+    return true;
+}
+
+bool ADC_Pot_LoadCalibration(ADC_PotCalibration_t *out_cal)
+{
+    ADC_PotCalibration_t stored = {0};
+
+    if (out_cal == NULL) {
+        return false;
+    }
+    if (!Flash_ReadCalibration(&stored) || !ADC_Pot_ValidateCalibration(&stored)) {
+        *out_cal = ADC_Pot_GetDefaultCalibration();
+        return false;
+    }
+
+    *out_cal = stored;
+    return true;
+}
+
+bool ADC_Pot_SaveCalibration(const ADC_PotCalibration_t *cal);
+-->
 - `REQ-C-015`: commanded direction과 encoder delta 방향이 일정 시간 이상 불일치하면 sensor/actuator fault 후보로 보고해야 한다.
+<!--
+구현 방향:
+- pulse_control이 마지막 commanded direction을 상태로 보관하고, encoder delta 부호와 비교한다.
+- deadband와 startup grace time을 두고, 연속 mismatch만 fault 후보로 본다.
+
+예시 코드:
+typedef struct {
+    int8_t commanded_sign;
+    uint16_t startup_grace_count;
+    uint16_t persist_count;
+    int32_t min_delta_count;
+    uint16_t mismatch_count;
+} DirectionMonitor_t;
+
+void Sensor_CheckDirectionMismatch(int8_t commanded_sign, int32_t delta_count)
+{
+    int8_t encoder_sign = (delta_count > 0) ? 1 : ((delta_count < 0) ? -1 : 0);
+
+    if (g_direction_monitor.startup_grace_count > 0U) {
+        g_direction_monitor.startup_grace_count--;
+        g_direction_monitor.mismatch_count = 0U;
+        return;
+    }
+
+    if ((delta_count < g_direction_monitor.min_delta_count) &&
+        (delta_count > -g_direction_monitor.min_delta_count)) {
+        g_direction_monitor.mismatch_count = 0U;
+        return;
+    }
+
+    if ((commanded_sign != 0) && (encoder_sign != 0) && (commanded_sign != encoder_sign)) {
+        if (++g_direction_monitor.mismatch_count >= g_direction_monitor.persist_count) {
+            SensorFault_Raise(SENSOR_FAULT_DIRECTION_MISMATCH);
+        }
+    } else {
+        g_direction_monitor.mismatch_count = 0U;
+    }
+}
+-->
 - `REQ-C-016`: 센서 fault는 정의된 최대 시간 내 safe state 전이와 진단 로그를 유발해야 한다.
+<!--
+구현 방향:
+- SensorFault_Raise()에서 fault code를 기록하고, PositionControl_EmergencyStop() 또는 fault manager로 즉시 전달한다.
+- 동시에 UART/trace buffer에 timestamp, raw, angle, diff를 로그로 남긴다.
+
+예시 코드:
+void SensorFault_Raise(SensorFaultCode_t code)
+{
+    SensorFaultLog_t log_entry;
+
+    g_sensor_fault.code = code;
+    g_sensor_fault.latched = 1U;
+    g_sensor_fault.detected_tick_ms = HAL_GetTick();
+
+    log_entry.code = code;
+    log_entry.tick_ms = g_sensor_fault.detected_tick_ms;
+    log_entry.encoder_count = g_encoder.accum_count;
+    log_entry.adc_raw = g_adc_latest_raw;
+    log_entry.crosscheck_diff_deg = g_last_crosscheck_diff_deg;
+    SensorFaultLog_Push(&log_entry);
+
+    PositionControl_EmergencyStop();
+}
+-->
 
 인수 기준:
 

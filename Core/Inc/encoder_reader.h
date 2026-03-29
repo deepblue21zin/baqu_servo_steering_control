@@ -6,50 +6,28 @@
 #ifndef ENCODER_READER_H
 #define ENCODER_READER_H
 
-
 #include <stdint.h>
 
-/* ========== Functions ========== */
+typedef struct {
+    uint16_t raw_count;
+    int32_t delta_count;
+    int64_t accum_count;
+    float motor_deg;
+    uint32_t age_ms;
+    uint32_t sample_tick_ms;
+} EncoderSample_t; /* MODIFIED(Codex): richer encoder snapshot for diagnostics. */
 
-/**
- * @brief Initialize encoder reader
- * @return 0 on success, -1 on error
- */
 int EncoderReader_Init(void);
-
-/**
- * @brief Get current angle in degrees
- * @return Angle in degrees
- */
 float EncoderReader_GetAngleDeg(void);
-
-/**
- * @brief Get unwrapped encoder count with offset applied
- * @return Encoder count
- */
+float EncoderReader_GetMotorDeg(void);
 int32_t EncoderReader_GetCount(void);
-
-/**
- * @brief Get hardware timer raw counter value
- * @return Raw timer counter
- */
+int32_t EncoderReader_GetDeltaCount(void);
+uint8_t EncoderReader_GetSample(EncoderSample_t *out_sample);
 uint32_t EncoderReader_GetRawCounter(void);
-
-/**
- * @brief Reset encoder count to zero
- */
 void EncoderReader_Reset(void);
-
-/**
- * @brief Set encoder offset (for homing)
- * @param offset Offset value
- */
 void EncoderReader_SetOffset(int32_t offset);
-
-/**
- * @brief Check if encoder is initialized
- * @return 1 if initialized, 0 otherwise
- */
+void EncoderReader_EnableVirtualFeedback(uint8_t enable);
+void EncoderReader_SetVirtualFeedbackCount(int64_t accum_count);
 uint8_t EncoderReader_IsInitialized(void);
 
 #endif /* ENCODER_READER_H */

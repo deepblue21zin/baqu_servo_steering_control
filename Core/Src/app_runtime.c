@@ -26,7 +26,7 @@
 #define APP_RUNTIME_KEYBOARD_STEP_DEG            1.0f
 #define APP_RUNTIME_ENCODER_DIAG_ENABLE          1
 #define APP_RUNTIME_ENCODER_DIAG_PERIOD_MS       100U
-#define APP_RUNTIME_VIRTUAL_ENCODER_LOG_ENABLE   1
+#define APP_RUNTIME_VIRTUAL_ENCODER_LOG_ENABLE   0
 #define APP_RUNTIME_PERIODIC_CSV_LOG_ENABLE      1
 #define APP_RUNTIME_PERIODIC_CSV_LOG_PERIOD_MS   100U
 #define APP_RUNTIME_PERIODIC_DIAG_DIVIDER        100U
@@ -35,14 +35,6 @@ extern volatile uint8_t interrupt_flag;
 
 static uint32_t g_latency_report_seq = 0U;
 static uint32_t g_debug_print_divider = 0U;
-typedef struct {
-    int64_t count;
-    float pulse_residual;
-    uint32_t last_update_ms;
-    uint8_t initialized;
-} AppRuntime_VirtualEncoder_t;
-
-static AppRuntime_VirtualEncoder_t g_virtual_encoder = {0};
 #if APP_RUNTIME_KEYBOARD_TEST_MODE
 static float g_keyboard_target_steer_deg = 0.0f;
 static char g_keyboard_line_buf[32] = {0};
@@ -55,6 +47,76 @@ static SteerMode_t g_current_mode = STEER_MODE_NONE;
 static uint8_t g_periodic_csv_enabled = 1U;
 #endif
 
+#if APP_RUNTIME_VIRTUAL_ENCODER_LOG_ENABLE
+typedef struct {
+    int64_t accum_count;
+    float count_residual;
+} AppRuntime_VirtualEncoder_t; /* Putty-only encoder estimator from applied pulse output. */
+
+static AppRuntime_VirtualEncoder_t g_virtual_encoder = {0};
+
+/* Reset the bench-only display encoder derived from pulse output. */
+static void AppRuntime_ResetVirtualEncoder(void)
+{
+    g_virtual_encoder.accum_count = 0;
+    g_virtual_encoder.count_residual = 0.0f;
+    EncoderReader_SetVirtualFeedbackCount(0);
+}
+
+/* Approximate encoder motion from the currently applied pulse frequency. */
+static void AppRuntime_UpdateVirtualEncoder(void)
+{
+    PulseControl_Status_t pulse_status = PulseControl_GetStatus();
+    float delta_pulses = 0.0f;
+    float delta_counts = 0.0f;
+    float total_counts = 0.0f;
+    int32_t whole_counts = 0;
+
+    if ((pulse_status.output_active == 0U) || (pulse_status.applied_frequency_hz == 0U)) {
+        EncoderReader_SetVirtualFeedbackCount(g_virtual_encoder.accum_count);
+        return;
+    }
+
+    delta_pulses = ((float)pulse_status.applied_frequency_hz) * 0.001f;
+    if (pulse_status.direction == DIR_CCW) {
+        delta_pulses = -delta_pulses;
+    }
+
+    delta_counts = delta_pulses * (DEG_PER_PULSE / ENCODER_DEG_PER_COUNT);
+    total_counts = g_virtual_encoder.count_residual + delta_counts;
+    whole_counts = (int32_t)total_counts;
+
+    g_virtual_encoder.accum_count += (int64_t)whole_counts;
+    g_virtual_encoder.count_residual = total_counts - (float)whole_counts;
+    EncoderReader_SetVirtualFeedbackCount(g_virtual_encoder.accum_count);
+}
+
+/* Return the Putty display count derived from the commanded motion. */
+static int32_t AppRuntime_GetDisplayEncoderCount(void)
+{
+    return (int32_t)g_virtual_encoder.accum_count;
+}
+
+/* Return a timer-like raw counter value for Putty display only. */
+static uint32_t AppRuntime_GetDisplayEncoderRaw(void)
+{
+    int32_t raw32 = 32768 + (int32_t)g_virtual_encoder.accum_count;
+    return (uint32_t)((uint16_t)raw32);
+}
+#else
+#define AppRuntime_ResetVirtualEncoder() ((void)0)
+#define AppRuntime_UpdateVirtualEncoder() ((void)0)
+static int32_t AppRuntime_GetDisplayEncoderCount(void)
+{
+    return EncoderReader_GetCount();
+}
+
+static uint32_t AppRuntime_GetDisplayEncoderRaw(void)
+{
+    return EncoderReader_GetRawCounter();
+}
+#endif
+
 /* Convert a steering-angle target into the equivalent motor-angle target. */
 static float AppRuntime_TargetSteeringDegToMotorDeg(float steering_deg)
 {
@@ -65,84 +127,6 @@ static float AppRuntime_TargetSteeringDegToMotorDeg(float steering_deg)
 static float AppRuntime_TargetMotorDegToSteeringDeg(float motor_deg)
 {
     return MotorDegToSteeringDeg(motor_deg);
-}
-
-/* Reset the bench-only virtual encoder that integrates applied pulse output. */
-static void AppRuntime_ResetVirtualEncoder(void)
-{
-#if APP_RUNTIME_VIRTUAL_ENCODER_LOG_ENABLE
-    g_virtual_encoder.count = 0;
-    g_virtual_encoder.pulse_residual = 0.0f;
-    g_virtual_encoder.last_update_ms = HAL_GetTick();
-    g_virtual_encoder.initialized = 1U;
-#endif
-}
-
-/* Integrate applied pulse frequency into a virtual encoder count for Putty logs. */
-static void AppRuntime_UpdateVirtualEncoder(void)
-{
-#if APP_RUNTIME_VIRTUAL_ENCODER_LOG_ENABLE
-    PulseControl_Status_t pulse_status = PulseControl_GetStatus();
-    uint32_t now_ms = HAL_GetTick();
-    uint32_t elapsed_ms = 0U;
-    float pulse_total = 0.0f;
-    uint32_t whole_pulses = 0U;
-    int64_t signed_pulses = 0;
-
-    if (g_virtual_encoder.initialized == 0U) {
-        AppRuntime_ResetVirtualEncoder();
-        return;
-    }
-
-    elapsed_ms = now_ms - g_virtual_encoder.last_update_ms;
-    if (elapsed_ms == 0U) {
-        return;
-    }
-    g_virtual_encoder.last_update_ms = now_ms;
-
-    if ((pulse_status.output_active == 0U) || (pulse_status.applied_frequency_hz == 0U)) {
-        return;
-    }
-
-    pulse_total = ((float)pulse_status.applied_frequency_hz * (float)elapsed_ms) / 1000.0f;
-    pulse_total += g_virtual_encoder.pulse_residual;
-    if (pulse_total < 1.0f) {
-        g_virtual_encoder.pulse_residual = pulse_total;
-        return;
-    }
-
-    whole_pulses = (uint32_t)pulse_total;
-    g_virtual_encoder.pulse_residual = pulse_total - (float)whole_pulses;
-    signed_pulses = (pulse_status.direction == DIR_CW) ? (int64_t)whole_pulses : -(int64_t)whole_pulses;
-    g_virtual_encoder.count += signed_pulses;
-#endif
-}
-
-/* Return the Putty-visible encoder count, optionally replaced by the virtual bench count. */
-static int32_t AppRuntime_GetDisplayEncoderCount(void)
-{
-#if APP_RUNTIME_VIRTUAL_ENCODER_LOG_ENABLE
-    if (g_virtual_encoder.count > (int64_t)INT32_MAX) {
-        return INT32_MAX;
-    }
-    if (g_virtual_encoder.count < (int64_t)INT32_MIN) {
-        return INT32_MIN;
-    }
-    return (int32_t)g_virtual_encoder.count;
-#else
-    return EncoderReader_GetCount();
-#endif
-}
-
-/* Return a raw-style centered value so existing Putty CSV columns stay consistent. */
-static uint32_t AppRuntime_GetDisplayEncoderRaw(void)
-{
-#if APP_RUNTIME_VIRTUAL_ENCODER_LOG_ENABLE
-    int64_t raw = 32768LL + g_virtual_encoder.count;
-    return (uint32_t)raw;
-#else
-    return EncoderReader_GetRawCounter();
-#endif
 }
 
 #if APP_RUNTIME_PERIODIC_CSV_LOG_ENABLE
@@ -657,34 +641,19 @@ static void AppRuntime_ServiceFastTick(void)
 /* Initialize the application-specific runtime after CubeMX peripherals are ready. */
 void AppRuntime_Init(void)
 {
-    HAL_StatusTypeDef enc_st = HAL_ERROR;
-    uint32_t enc_cnt = 0U;
-    uint32_t enc_cr1 = 0U;
-    uint32_t enc_smcr = 0U;
-    uint32_t enc_ccmr1 = 0U;
-    uint32_t enc_ccer = 0U;
-
     LatencyProfiler_Init(SystemCoreClock);
     AppRuntime_ConfigureDirectionPin();
 
-    enc_st = HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
-    enc_cnt = __HAL_TIM_GET_COUNTER(&htim2);
-    enc_cr1 = htim2.Instance->CR1;
-    enc_smcr = htim2.Instance->SMCR;
-    enc_ccmr1 = htim2.Instance->CCMR1;
-    enc_ccer = htim2.Instance->CCER;
-
-    printf("[ENCSTART] st=%d cnt=%lu CR1=0x%04lX SMCR=0x%04lX CCMR1=0x%04lX CCER=0x%04lX\r\n",
-           (int)enc_st,
-           (unsigned long)enc_cnt,
-           (unsigned long)enc_cr1,
-           (unsigned long)enc_smcr,
-           (unsigned long)enc_ccmr1,
-           (unsigned long)enc_ccer);
+    HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
 
     Relay_Init();
     PulseControl_Init();
     EncoderReader_Init();
+#if APP_RUNTIME_VIRTUAL_ENCODER_LOG_ENABLE
+    EncoderReader_EnableVirtualFeedback(1U);
+#else
+    EncoderReader_EnableVirtualFeedback(0U);
+#endif
     PositionControl_Init();
 
     Relay_ServoOn();
@@ -694,6 +663,10 @@ void AppRuntime_Init(void)
         char msg[] = "Servo Start!\r\n";
         HAL_UART_Transmit(&huart3, (uint8_t *)msg, strlen(msg), 100);
     }
+
+#if APP_RUNTIME_VIRTUAL_ENCODER_LOG_ENABLE
+    printf("[VENC] Putty ENC/RAW uses pulse-integrated virtual encoder display.\r\n");
+#endif
 
     EncoderReader_Reset();
     AppRuntime_ResetVirtualEncoder();
@@ -709,10 +682,6 @@ void AppRuntime_Init(void)
     g_periodic_csv_enabled = 1U;
 #endif
     PositionControl_Enable();
-
-#if APP_RUNTIME_VIRTUAL_ENCODER_LOG_ENABLE
-    printf("[VENC] Putty ENC/RAW columns use pulse-integrated virtual encoder values for bench logging.\r\n");
-#endif
 
 #if APP_RUNTIME_KEYBOARD_TEST_MODE
     AppRuntime_KeyboardPrintHelp();
