@@ -24,10 +24,16 @@ int EncoderReader_Init(void);
 float EncoderReader_GetAngleDeg(void);
 
 /**
- * @brief Get raw encoder count
+ * @brief Get unwrapped encoder count with offset applied
  * @return Encoder count
  */
 int32_t EncoderReader_GetCount(void);
+
+/**
+ * @brief Get hardware timer raw counter value
+ * @return Raw timer counter
+ */
+uint32_t EncoderReader_GetRawCounter(void);
 
 /**
  * @brief Reset encoder count to zero

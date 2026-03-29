@@ -1,10 +1,9 @@
 /*
  * pulse_control.h
  *
- * Created on: 2026.01.19.
- * Author: 고진성
- * Function: STM32 to L7 Servo Drive Pulse Generation
- * Hardware: NUCLEO-F767ZI -> SN75176 -> L7 Servo Drive
+ * STM32 to L7 servo drive pulse/direction generation
+ *   - PE9(TIM1_CH1) -> pulse line driver input -> PF+/PF-
+ *   - PE10(GPIO)    -> direction line driver input -> PR+/PR-
  */
 
 #ifndef INC_PULSE_CONTROL_H_
@@ -12,37 +11,34 @@
 
 #include <stdint.h>
 
-// 서보 모터 방향 정의
+#ifndef DIR_ACTIVE_HIGH_FOR_CW
+#define DIR_ACTIVE_HIGH_FOR_CW 1
+#endif
+
 typedef enum {
-    DIR_CW = 0,   // 시계 방향 (Clockwise)
-    DIR_CCW = 1   // 반시계 방향 (Counter-Clockwise)
+    DIR_CW = 0,
+    DIR_CCW = 1
 } MotorDirection;
 
-/**
-  * @brief 펄스 제어 모듈 초기화
-  * @param htim TIM1 핸들러 주소
-  */
+typedef struct {
+    int32_t requested_frequency_hz;
+    uint32_t applied_frequency_hz;
+    uint32_t autoreload;
+    uint32_t compare;
+    MotorDirection direction;
+    uint8_t output_active;
+    uint8_t line_driver_enabled;
+    uint8_t reverse_guard_active;
+    uint8_t busy;
+} PulseControl_Status_t;
+
 void PulseControl_Init(void);
-
-/**
-  * @brief 특정 개수만큼의 펄스를 전송 (위치 제어 핵심 함수)
-  * @param steps 전송할 펄스 개수 (Distance)
-  * @param dir 회전 방향 (Direction)
-  */
 void PulseControl_SendSteps(uint32_t steps, MotorDirection dir);
-
-/**
-  * @brief 펄스 전송 즉시 중지 (비상 정지용)
-  */
 void PulseControl_Stop(void);
-
-/**
-  * @brief 현재 모터가 동작 중인지 확인
-  * @return 1: 동작 중, 0: 대기 중
-  */
 uint8_t PulseControl_IsBusy(void);
 void pulse_forward(uint32_t count);
 void pulse_reverse(uint32_t count);
 void PulseControl_SetFrequency(int32_t freq_hz);
+PulseControl_Status_t PulseControl_GetStatus(void);
 
 #endif /* INC_PULSE_CONTROL_H_ */

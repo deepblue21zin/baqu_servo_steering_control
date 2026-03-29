@@ -13,6 +13,7 @@
 #include "ethernet_communication.h"
 
 #include "main.h"
+#include "constants.h"
 #include "position_control.h"
 #include "pulse_control.h"
 #include "relay_control.h"
@@ -234,6 +235,8 @@ static int EthComm_ParseCommand(const char *line, EthComm_Command_t *out_cmd)
 
 static int EthComm_DispatchCommand(const EthComm_Command_t *cmd)
 {
+    float target_motor_deg = 0.0f;
+
     if (cmd == NULL) {
         return ETH_COMM_ERR_BAD_PARAM;
     }
@@ -248,7 +251,8 @@ static int EthComm_DispatchCommand(const EthComm_Command_t *cmd)
         return EthComm_SendString("OK SERVO OFF\r\n");
 
     case ETH_CMD_SET_TARGET:
-        if (PositionControl_SetTarget(cmd->f32_value) != 0) {
+        target_motor_deg = SteeringDegToMotorDeg(cmd->f32_value);
+        if (PositionControl_SetTargetWithSource(target_motor_deg, CMD_SRC_SERVICE) != 0) {
             return EthComm_SendString("ERR TARGET\r\n");
         }
         return EthComm_SendString("OK TARGET\r\n");
@@ -268,9 +272,9 @@ static int EthComm_DispatchCommand(const EthComm_Command_t *cmd)
 
 static int EthComm_SendStatus(void)
 {
-    float cur = PositionControl_GetCurrentAngle();
-    float tgt = PositionControl_GetTarget();
-    float err = PositionControl_GetError();
+    float cur = MotorDegToSteeringDeg(PositionControl_GetCurrentAngle());
+    float tgt = MotorDegToSteeringDeg(PositionControl_GetTarget());
+    float err = MotorDegToSteeringDeg(PositionControl_GetError());
     int n = 0;
 
     n = snprintf((char *)g_eth.cfg.tx_buffer,
@@ -304,8 +308,8 @@ static volatile uint32_t    g_last_rx_tick = 0U;
 
 static float clamp_deg(float v)
 {
-    if (v > MAX_ANGLE_DEG) return MAX_ANGLE_DEG;
-    if (v < MIN_ANGLE_DEG) return MIN_ANGLE_DEG;
+    if (v > MAX_STEERING_ANGLE) return MAX_STEERING_ANGLE;
+    if (v < MIN_STEERING_ANGLE) return MIN_STEERING_ANGLE;
     return v;
 }
 
