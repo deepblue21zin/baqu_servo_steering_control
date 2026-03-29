@@ -6,6 +6,7 @@
 #define DBG_FAULT_POS_LIMIT   (1UL << 0)
 #define DBG_FAULT_TRACKING    (1UL << 1)
 #define DBG_FAULT_TIMEOUT     (1UL << 2)
+#define DBG_FAULT_VELOCITY    (1UL << 3)
 #define DBG_FAULT_DISABLED    (1UL << 8)
 #define DBG_FAULT_EMERGENCY   (1UL << 9)
 
