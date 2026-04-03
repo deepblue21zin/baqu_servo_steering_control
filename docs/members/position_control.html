@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Position Control Assignment Brief</title>
+  <link rel="stylesheet" href="member_brief.css">
+</head>
+<body>
+  <main class="page">
+    <div class="back-row">
+      <a class="back-link" href="../README.md">Doc index</a>
+      <a class="back-link" href="../steering_portal/index.html">Steering portal</a>
+      <a class="back-link" href="../REQ/steering_project_req_ownership_guide.html">REQ guide</a>
+    </div>
+
+    <header class="hero">
+      <p class="eyebrow">Member Brief</p>
+      <h1>Position Control 담당 상세 할당서</h1>
+      <p>
+        이 문서는 `position_control.c`를 맡는 팀원이 지금 코드에서 무엇이 이미 구현되어 있고,
+        무엇이 아직 현업형 제어기 계약으로 닫히지 않았는지 현재 baseline 기준으로 정리한 문서다.
+        현재 제어 루프 자체는 살아 있고 command lifecycle, PID, statistics, safety evaluator 분리까지는 되어 있다.
+        하지만 <span class="strong">startup arm gate, fault latch, target validation, deadband/hold, richer diagnostics</span>가 아직 부족하다.
+      </p>
+      <div class="chip-row">
+        <span class="chip">Owner: Motion Control &amp; Fault Manager</span>
+        <span class="chip">관련 상위 REQ: REQ-P0-004</span>
+        <span class="chip">기준 코드: 2026-03-30</span>
+      </div>
+
+      <div class="hero-grid section">
+        <article class="hero-card">
+          <h3>이번 주 바로 맡길 일</h3>
+          <ol>
+            <li>`PositionControl_Enable()`에 ready / arm precondition을 넣는다.</li>
+            <li>단일 `fault_flag`를 latch 가능한 reason 구조로 확장한다.</li>
+            <li>target validation과 deadband/hold 정책을 controller 안에서 명시한다.</li>
+          </ol>
+        </article>
+        <article class="hero-card">
+          <h3>현재 코드의 강점</h3>
+          <p>
+            `position_control.c`는 PID, command lifecycle, settled 판정, stats, safety evaluator 분리까지 이미 되어 있다.
+            따라서 이 파트는 바닥부터 다시 만드는 일이 아니라, 이미 있는 루프를 production-like contract로 끌어올리는 작업에 가깝다.
+          </p>
+        </article>
+        <article class="hero-card">
+          <h3>가장 큰 리스크</h3>
+          <p>
+            지금은 startup에서 auto-enable이 남아 있고, `PositionControl_Enable()`도 ready 조건 없이 emergency release까지 수행한다.
+            즉 제어기는 동작하지만 운전 허가 정책은 아직 약하다.
+          </p>
+        </article>
+      </div>
+    </header>
+
+    <section class="panel">
+      <p class="eyebrow">Current Baseline</p>
+      <h2>현재 코드에서 이미 구현된 것</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>파일</th>
+            <th>현재 구현</th>
+            <th>이미 되는 점</th>
+            <th>아직 부족한 점</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mono">Core/Src/position_control.c</td>
+            <td>1 ms 루프에서 `current_angle`, `error`, `velocity`, PID output을 계산하고 `PulseControl_SetFrequency()`로 보낸다.</td>
+            <td>command lifecycle, reached/timeout/abort/fault 로그, stats, stable 판정이 이미 있다.</td>
+            <td>`fault_flag`가 단일 값이고, `Enable()`이 ready precondition 없이 emergency release를 수행한다. 입력 validation과 rate limit도 없다.</td>
+          </tr>
+          <tr>
+            <td class="mono">Core/Src/position_control_safety.c</td>
+            <td>angle limit, tracking error, velocity limit을 독립 evaluator로 판정한다.</td>
+            <td>safety evaluator가 actuator side-effect 없이 result만 반환하는 구조는 좋다.</td>
+            <td>stale sensor, wrong-direction, deadline miss, comm timeout, startup inhibit는 여기 taxonomy에 들어오지 않는다. 기본 timeout도 0이다.</td>
+          </tr>
+          <tr>
+            <td class="mono">Core/Src/position_control_diag.c</td>
+            <td>command source/result/state 문자열과 debug vars를 갱신한다.</td>
+            <td>`dbg_target_mdeg`, `dbg_pos_mdeg`, `dbg_err_mdeg`, `dbg_pwm_cmd`, `dbg_fault_flags`를 바로 볼 수 있다.</td>
+            <td>actual dt, saturation, last fault time, ready reject reason, target source age 같은 분석 정보는 아직 부족하다.</td>
+          </tr>
+          <tr>
+            <td class="mono">Core/Src/app_runtime.c</td>
+            <td>keyboard와 UDP 경로에서 steering target을 motor deg로 바꿔 `PositionControl_SetTargetWithSource()`로 넘긴다.</td>
+            <td>입력 source 구분과 CSV evidence는 이미 있다.</td>
+            <td>startup auto-enable이 controller contract보다 앞에 있어, control ownership이 완전히 닫히지 않았다.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Gap Analysis</p>
+      <h2>지금 상태가 왜 부족한가</h2>
+      <div class="issue-grid">
+        <article class="issue-card critical">
+          <h3>운전 허가 조건이 제어기 안에서 닫혀 있지 않다</h3>
+          <p>
+            `PositionControl_Enable()`는 ready 검증 없이 `control_enabled = true`와 `Relay_EmergencyRelease()`를 수행한다.
+            이 상태에서는 startup safety와 control contract가 분리되지 않는다.
+          </p>
+        </article>
+        <article class="issue-card critical">
+          <h3>Fault manager가 너무 얇다</h3>
+          <p>
+            지금은 `fault_flag` 단일 값과 일부 debug bit만 있다.
+            fault reason, latched 여부, clear 조건, safe action을 구분하기에는 부족하다.
+          </p>
+        </article>
+        <article class="issue-card warning">
+          <h3>입력 validation이 부족하다</h3>
+          <p>
+            `SetTargetWithSource()`는 범위만 검사하고 `NaN`, `Inf`, stale source, 급격한 step, rate limit을 처리하지 않는다.
+            특히 `NaN`은 비교 연산을 통과할 수 있어 명시적 `isfinite()` 검사가 필요하다.
+          </p>
+        </article>
+        <article class="issue-card warning">
+          <h3>정지 수렴 정책이 lifecycle과 완전히 일치하지 않는다</h3>
+          <p>
+            stable 판정은 있지만 deadband / hold / release zone이 별도 계약으로 정리돼 있지 않아,
+            작은 오차에서 pulse가 계속 살아 있을 가능성을 체계적으로 다루지 못한다.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Detailed REQ</p>
+      <h2>팀원에게 그대로 넘길 실행형 요구사항</h2>
+      <div class="req-grid">
+        <article class="req-card">
+          <div class="req-top"><span class="priority p0">P0</span><span class="req-id">REQ-CTRL-001</span></div>
+          <h3>Enable은 ready / arm 조건이 만족될 때만 허용한다</h3>
+          <p><span class="strong">현재 구현:</span> `PositionControl_Enable()`는 즉시 `control_enabled=true`와 `Relay_EmergencyRelease()`를 수행한다.</p>
+          <p><span class="strong">왜 부족한가:</span> homing, relay, sensor validity, operator arm이 아직 제어기 gate로 들어오지 않는다.</p>
+          <p><span class="strong">개선 방향:</span> `ready`, `fault_clear`, `homing_complete`, `emg_released` 같은 precondition bitmask를 받아 enable 거부 사유까지 남긴다.</p>
+          <p><span class="strong">완료 기준:</span> power-on 직후 아무 입력이 없을 때 pulse가 없고, `READY=false`면 enable 거부 로그가 남는다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top"><span class="priority p0">P0</span><span class="req-id">REQ-CTRL-002</span></div>
+          <h3>Fault manager를 bitmask + latch + clear matrix로 확장한다</h3>
+          <p><span class="strong">현재 구현:</span> timeout / limit / velocity는 일부 구분되지만 내부 fault representation은 매우 얇다.</p>
+          <p><span class="strong">왜 부족한가:</span> 같은 emergency stop이어도 tracking, timeout, stale sensor, estop input은 후속 조치가 다르다.</p>
+          <p><span class="strong">개선 방향:</span> reason bitmask, latched 여부, clear 조건, safe action을 표로 정하고 `PositionControl_Enable()`에서 자동 clear를 금지한다.</p>
+          <p><span class="strong">완료 기준:</span> fault 발생 후 reason을 snapshot과 구조체에서 읽을 수 있고, clear 조건 전에는 재enable이 거부된다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top"><span class="priority p1">P1</span><span class="req-id">REQ-CTRL-003</span></div>
+          <h3>Target input validation과 rate limit를 추가한다</h3>
+          <p><span class="strong">현재 구현:</span> motor_deg 범위 비교만 수행한다.</p>
+          <p><span class="strong">왜 부족한가:</span> `NaN`, `Inf`, stale source, 너무 큰 step가 제어기를 직접 흔들 수 있다.</p>
+          <p><span class="strong">개선 방향:</span> `isfinite`, range, source freshness, optional slew/rate limit를 추가하고 source별 reject reason을 로그로 남긴다.</p>
+          <p><span class="strong">완료 기준:</span> invalid target은 명확히 거부되고, 큰 step에서도 output이 제한된 기울기로 변한다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top"><span class="priority p1">P1</span><span class="req-id">REQ-CTRL-004</span></div>
+          <h3>Deadband / hold / release 정책을 정식화한다</h3>
+          <p><span class="strong">현재 구현:</span> `STABLE_ERROR_THRESHOLD`와 `STABLE_TIME_MS` 기반으로 reached를 판정한다.</p>
+          <p><span class="strong">왜 부족한가:</span> stable 판정과 actual pulse stop 정책이 완전히 같은 의미로 설명되지는 않는다.</p>
+          <p><span class="strong">개선 방향:</span> `|error|`와 `|velocity|`를 함께 보는 hold zone, release zone, hysteresis 정책을 넣고 steady-state hunting을 줄인다.</p>
+          <p><span class="strong">완료 기준:</span> `0 -> 5deg -> 0deg` step 후 목표 근처에서 pulse가 멈추고 steady-state output이 0으로 수렴한다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top"><span class="priority p1">P1</span><span class="req-id">REQ-CTRL-005</span></div>
+          <h3>Safety taxonomy를 stale / wrong-direction / comm timeout까지 확장한다</h3>
+          <p><span class="strong">현재 구현:</span> safety evaluator는 angle, tracking, velocity만 본다.</p>
+          <p><span class="strong">왜 부족한가:</span> 실제 현장 문제는 sensor stale, commanded direction mismatch, comm timeout이 더 흔할 수 있다.</p>
+          <p><span class="strong">개선 방향:</span> sensor team과 integration team 결과를 받아 stale/mismatch/timeouts를 controller fault taxonomy에 포함한다.</p>
+          <p><span class="strong">완료 기준:</span> 각 fault가 detect condition, latch 여부, clear 절차와 함께 정의된다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top"><span class="priority p2">P2</span><span class="req-id">REQ-CTRL-006</span></div>
+          <h3>제어기 진단과 성능 지표를 정량화한다</h3>
+          <p><span class="strong">현재 구현:</span> stats, CSV, debug vars는 있지만 tuning evidence 형식이 아직 정해져 있지 않다.</p>
+          <p><span class="strong">왜 부족한가:</span> gain 변경 전후 비교와 fault 재현 설명이 체계적이지 않다.</p>
+          <p><span class="strong">개선 방향:</span> actual dt, saturation, last fault timestamp, target source, settle/overshoot CSV 규격을 정하고 tuning result 표로 관리한다.</p>
+          <p><span class="strong">완료 기준:</span> 대표 step response 3종에 대해 CSV와 요약표를 남기고 before/after 비교가 가능하다.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Evidence</p>
+      <h2>이 파트의 완료 증거로 받아야 하는 것</h2>
+      <div class="evidence-grid">
+        <article class="evidence-card">
+          <h3>로그</h3>
+          <ul>
+            <li>enable reject log</li>
+            <li>fault reason / clear log</li>
+            <li>step response CSV</li>
+          </ul>
+        </article>
+        <article class="evidence-card">
+          <h3>문서</h3>
+          <ul>
+            <li>fault matrix</li>
+            <li>enable precondition 표</li>
+            <li>deadband / hold parameter 표</li>
+          </ul>
+        </article>
+        <article class="evidence-card">
+          <h3>관찰 도구</h3>
+          <ul>
+            <li>CSV target/current/error/output</li>
+            <li>`dbg_target_mdeg`, `dbg_pos_mdeg`, `dbg_err_mdeg`, `dbg_pwm_cmd`</li>
+            <li>`PE9` stop 파형</li>
+          </ul>
+        </article>
+      </div>
+      <div class="note">
+        이 파트의 최종 목표는 "PID가 돈다"가 아니라
+        <span class="strong">언제 움직이고 언제 멈추고 왜 fault를 냈는지까지 설명 가능한 제어기</span>를 만드는 것이다.
+      </div>
+    </section>
+
+    <div class="footer">
+      Last updated: 2026-03-30<br>
+      Source baseline: `position_control.c`, `position_control_safety.c`, `position_control_diag.c`, `app_runtime.c`
+    </div>
+  </main>
+</body>
+</html>

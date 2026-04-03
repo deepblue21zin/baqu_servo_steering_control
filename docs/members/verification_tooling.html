@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Verification &amp; Tooling Assignment Brief</title>
+  <link rel="stylesheet" href="member_brief.css">
+</head>
+<body>
+  <main class="page">
+    <div class="back-row">
+      <a class="back-link" href="../README.md">Doc index</a>
+      <a class="back-link" href="../steering_portal/index.html">Steering portal</a>
+      <a class="back-link" href="../putty/index.html">PuTTY live viewer</a>
+    </div>
+
+    <header class="hero">
+      <p class="eyebrow">Member Brief</p>
+      <h1>Verification / Tooling 담당 상세 할당서</h1>
+      <p>
+        이 문서는 latency, debug vars, CubeMonitor, PuTTY 로그, plotting script, portal 같은 검증/도구 체계를 맡는 팀원이
+        현재 자산을 어떻게 운영 수준으로 끌어올려야 하는지 정리한 문서다.
+        지금은 자산이 이미 많다. `latency_profiler`, `debug_vars`, CSV, PuTTY viewer, bridge, plotting script, portal`까지 있다.
+        부족한 점은 <span class="strong">artifact 연결성, async logging, current doc sync, evidence automation</span>이다.
+      </p>
+      <div class="chip-row">
+        <span class="chip">Owner: Verification &amp; Tooling</span>
+        <span class="chip">관련 상위 REQ: REQ-P1-004</span>
+        <span class="chip">관련 상위 REQ: REQ-P2-002</span>
+        <span class="chip">기준 코드: 2026-03-30</span>
+      </div>
+
+      <div class="hero-grid section">
+        <article class="hero-card">
+          <h3>이번 주 바로 맡길 일</h3>
+          <ol>
+            <li>raw log, meta, plot, portal snapshot을 run ID 하나로 묶는 규칙을 만든다.</li>
+            <li>current code 기준 signal dictionary와 debug var 목록을 최신화한다.</li>
+            <li>strict latency 측정과 interactive logging을 분리하는 async logging 방향을 정한다.</li>
+          </ol>
+        </article>
+        <article class="hero-card">
+          <h3>현재 코드의 강점</h3>
+          <p>
+            DWT 기반 latency profiler, command lifecycle, CSV, ENCDBG, debug vars, PuTTY live viewer, plotting script, portal까지
+            이미 evidence skeleton이 상당히 강하다. 이건 새로 만들기보다 연결성과 재현성을 높이는 단계다.
+          </p>
+        </article>
+        <article class="hero-card">
+          <h3>가장 큰 리스크</h3>
+          <p>
+            도구는 많은데 run ID / Git SHA / measurement metadata가 자동으로 묶이지 않는다.
+            그래서 artifact는 많아도 "같은 실험의 증거 묶음"으로 보기 어려운 순간이 생긴다.
+          </p>
+        </article>
+      </div>
+    </header>
+
+    <section class="panel">
+      <p class="eyebrow">Current Baseline</p>
+      <h2>현재 코드와 도구에서 이미 구현된 것</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>파일 / 도구</th>
+            <th>현재 구현</th>
+            <th>이미 되는 점</th>
+            <th>아직 부족한 점</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mono">Core/Src/latency_profiler.c</td>
+            <td>DWT CYCCNT 기반으로 `Sense/Control/Actuate/Comms` 샘플을 저장하고 `avg/p99/max`와 deadline miss count를 계산한다.</td>
+            <td>2000샘플 자동 배치 보고와 p99 기반 latency evidence가 이미 가능하다.</td>
+            <td>strict latency 실험과 interactive UART logging이 같은 경로에 섞일 수 있다. artifact tagging도 없다.</td>
+          </tr>
+          <tr>
+            <td class="mono">Core/Src/position_control_diag.c + debug_vars</td>
+            <td>debug vars와 readable command/fault/state 문자열을 제공한다.</td>
+            <td>CubeMonitor와 Watch에서 target/current/error/output/fault를 바로 볼 수 있다.</td>
+            <td>requested/applied Hz, ready bits, last fault timestamp, sensor validity, last reject reason 같은 관찰 신호는 부족하다.</td>
+          </tr>
+          <tr>
+            <td class="mono">putty_log/plot_putty_log.py</td>
+            <td>CSV, KB, LATENCY 로그를 읽어 `control_trace.png`, `latency_trace.png`를 만든다.</td>
+            <td>기본 plot automation은 이미 있다.</td>
+            <td>run metadata, Git SHA, portal snapshot, measurement manifest와 연결되지 않는다.</td>
+          </tr>
+          <tr>
+            <td class="mono">Doc/putty + bridge launcher</td>
+            <td>브라우저에서 `putty.log`를 live로 분류/해석/recording export할 수 있다.</td>
+            <td>실험 중 실시간 로그 해석과 JSON recording이 가능하다.</td>
+            <td>실험 종료 후 plots/README/portal evidence와 자동으로 이어지지는 않는다.</td>
+          </tr>
+          <tr>
+            <td class="mono">Doc/cubemonitor_setup_guide.md</td>
+            <td>CubeMonitor 기본 사용 흐름을 설명한다.</td>
+            <td>툴 온보딩 가이드로는 도움이 된다.</td>
+            <td>현재 문서에는 `TIM4`와 예전 핀 설명이 남아 있어 최신 `TIM2(PA0/PB3)` baseline과 어긋난다.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Gap Analysis</p>
+      <h2>지금 상태가 왜 부족한가</h2>
+      <div class="issue-grid">
+        <article class="issue-card critical">
+          <h3>증거물이 같은 실험 단위로 묶이지 않는다</h3>
+          <p>
+            raw log, meta, plot, portal screenshot, commit hash가 자동으로 한 세트로 연결되지 않는다.
+            그래서 나중에 "이 그래프가 어느 바이너리 결과인지" 다시 확인해야 할 수 있다.
+          </p>
+        </article>
+        <article class="issue-card critical">
+          <h3>Timing 측정과 logging이 아직 분리되지 않았다</h3>
+          <p>
+            현재 UART printf 기반 로그는 분석에는 좋지만 strict latency 실험에는 간섭원이 될 수 있다.
+            async logging 또는 dual-mode logging policy가 필요하다.
+          </p>
+        </article>
+        <article class="issue-card warning">
+          <h3>관찰 신호가 아직 부족하다</h3>
+          <p>
+            현재 debug vars는 제어기 최소 추세는 보여주지만 system-ready, packet health, sensor validity, actuator gate reason을 한 번에 보기는 어렵다.
+          </p>
+        </article>
+        <article class="issue-card warning">
+          <h3>문서 드리프트가 있다</h3>
+          <p>
+            예를 들어 CubeMonitor 가이드는 아직 TIM4 기준 설명이 남아 있다.
+            도구 문서는 가장 먼저 낡기 쉬우므로 current baseline과 동기화가 중요하다.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Detailed REQ</p>
+      <h2>팀원에게 그대로 넘길 실행형 요구사항</h2>
+      <div class="req-grid">
+        <article class="req-card">
+          <div class="req-top"><span class="priority p0">P0</span><span class="req-id">REQ-VER-001</span></div>
+          <h3>Evidence manifest를 만든다</h3>
+          <p><span class="strong">현재 구현:</span> raw log, PNG, portal, change log가 각각 존재한다.</p>
+          <p><span class="strong">왜 부족한가:</span> 같은 실험의 산출물이 하나의 run ID로 연결되지 않는다.</p>
+          <p><span class="strong">개선 방향:</span> run ID, Git SHA, board, build options, input sequence, raw log path, plot path, portal snapshot path를 한 manifest 파일로 묶는다.</p>
+          <p><span class="strong">완료 기준:</span> 실험 하나를 열면 raw log부터 plot, meta, 해석 문서까지 바로 추적할 수 있다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top"><span class="priority p0">P0</span><span class="req-id">REQ-VER-002</span></div>
+          <h3>Strict timing과 interactive logging 경로를 분리한다</h3>
+          <p><span class="strong">현재 구현:</span> latency batch와 CSV/diagnostic printf가 같은 펌웨어 운용 흐름에 공존한다.</p>
+          <p><span class="strong">왜 부족한가:</span> 분석성은 좋지만 strict latency 실험과 bring-up logging이 서로 영향을 줄 수 있다.</p>
+          <p><span class="strong">개선 방향:</span> DMA + ring buffer 또는 build/profile mode를 도입해 `strict_latency`와 `interactive_bringup`를 분리한다.</p>
+          <p><span class="strong">완료 기준:</span> 동일한 기능을 유지하면서도 latency 실험 전용 빌드와 bring-up 빌드를 구분할 수 있다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top"><span class="priority p1">P1</span><span class="req-id">REQ-VER-003</span></div>
+          <h3>Debug signal dictionary를 확장한다</h3>
+          <p><span class="strong">현재 구현:</span> debug vars는 target/current/error/output/fault 중심이다.</p>
+          <p><span class="strong">왜 부족한가:</span> ready bits, packet health, sensor validity, requested/applied Hz를 같이 보지 못하면 cross-team triage가 느리다.</p>
+          <p><span class="strong">개선 방향:</span> signal dictionary 문서를 만들고, 필요한 추가 debug vars와 sampling policy를 정의한다.</p>
+          <p><span class="strong">완료 기준:</span> CubeMonitor / MATLAB / portal에서 같은 변수 이름과 의미를 공유한다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top"><span class="priority p1">P1</span><span class="req-id">REQ-VER-004</span></div>
+          <h3>Current code 기준 도구 문서를 동기화한다</h3>
+          <p><span class="strong">현재 구현:</span> 일부 문서는 TIM4 같은 예전 설명이 남아 있다.</p>
+          <p><span class="strong">왜 부족한가:</span> 도구 문서가 최신 코드와 다르면 테스트 담당자가 잘못된 핀/신호를 볼 수 있다.</p>
+          <p><span class="strong">개선 방향:</span> CubeMonitor, latency, plotting, putty viewer 가이드를 current `TIM2(PA0/PB3)` baseline과 새 폴더 구조 기준으로 전부 맞춘다.</p>
+          <p><span class="strong">완료 기준:</span> 문서만 따라가도 현재 코드 기준 측정과 plotting이 바로 된다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top"><span class="priority p1">P1</span><span class="req-id">REQ-VER-005</span></div>
+          <h3>Plotting / recording / portal evidence를 자동 연결한다</h3>
+          <p><span class="strong">현재 구현:</span> plot script, live viewer recording, portal은 각각 독립적으로 존재한다.</p>
+          <p><span class="strong">왜 부족한가:</span> 한 번의 bench run을 마친 뒤 후처리가 수동 단계로 남아 있다.</p>
+          <p><span class="strong">개선 방향:</span> raw log -> parse -> PNG -> recording JSON -> summary markdown -> portal deep link까지 이어지는 반자동 파이프라인을 만든다.</p>
+          <p><span class="strong">완료 기준:</span> bench run 하나 끝나면 제출 가능한 artifact set가 거의 자동으로 만들어진다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top"><span class="priority p2">P2</span><span class="req-id">REQ-VER-006</span></div>
+          <h3>Submission-ready 검증 패키지 형식을 만든다</h3>
+          <p><span class="strong">현재 구현:</span> 자료는 풍부하지만 제출 패키지 형식은 고정돼 있지 않다.</p>
+          <p><span class="strong">왜 부족한가:</span> 포트폴리오, 발표, 인수인계마다 자료를 매번 다시 조립해야 한다.</p>
+          <p><span class="strong">개선 방향:</span> `run summary`, `plot 2장`, `fault log`, `latency table`, `portal snapshot`, `commit hash`를 기본 패키지로 고정한다.</p>
+          <p><span class="strong">완료 기준:</span> 대표 실험 1건을 5분 안에 제출/공유 가능한 패키지로 정리할 수 있다.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Evidence</p>
+      <h2>이 파트의 완료 증거로 받아야 하는 것</h2>
+      <div class="evidence-grid">
+        <article class="evidence-card">
+          <h3>자동화</h3>
+          <ul>
+            <li>run manifest 예시</li>
+            <li>raw log -> plot -> summary script</li>
+            <li>artifact naming rule</li>
+          </ul>
+        </article>
+        <article class="evidence-card">
+          <h3>문서</h3>
+          <ul>
+            <li>current signal dictionary</li>
+            <li>current CubeMonitor guide</li>
+            <li>latency/build mode policy</li>
+          </ul>
+        </article>
+        <article class="evidence-card">
+          <h3>산출물</h3>
+          <ul>
+            <li>latency CSV + meta</li>
+            <li>control/latency PNG</li>
+            <li>portal snapshot + recording JSON</li>
+          </ul>
+        </article>
+      </div>
+      <div class="note">
+        이 파트의 목표는 "도구가 많다"가 아니라
+        <span class="strong">어떤 실험이든 재현 가능하고 공유 가능한 evidence pack으로 남기는 것</span>이다.
+      </div>
+    </section>
+
+    <div class="footer">
+      Last updated: 2026-03-30<br>
+      Source baseline: `latency_profiler.c`, `position_control_diag.c`, `debug_vars.h`, `putty_log/plot_putty_log.py`, `Doc/putty`
+    </div>
+  </main>
+</body>
+</html>
