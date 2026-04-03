@@ -9,11 +9,9 @@
 #ifndef INC_PULSE_CONTROL_H_
 #define INC_PULSE_CONTROL_H_
 
-#include <stdint.h>
+#include "project_params.h"
 
-#ifndef DIR_ACTIVE_HIGH_FOR_CW
-#define DIR_ACTIVE_HIGH_FOR_CW 1
-#endif
+#include <stdint.h>
 
 typedef enum {
     DIR_CW = 0,

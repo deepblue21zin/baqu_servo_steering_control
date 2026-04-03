@@ -8,10 +8,6 @@
 #include "pulse_control.h"
 #include "tim.h"
 
-#define PULSECONTROL_MIN_FREQ_HZ         10U
-#define PULSECONTROL_MAX_FREQ_HZ         100000U
-#define PULSECONTROL_DIRECTION_GUARD_MS  1U
-
 typedef enum {
     PULSE_REVERSE_IDLE = 0U,
     PULSE_REVERSE_WAIT_STOP = 1U,

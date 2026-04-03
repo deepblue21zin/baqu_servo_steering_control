@@ -66,8 +66,8 @@ int EncoderReader_Init(void)
 {
     __HAL_TIM_SET_COUNTER(&ENCODER_TIMER, ENCODER_COUNTER_CENTER);
 
-    g_encoder.raw_count = (uint16_t)ENCODER_COUNTER_CENTER;
-    g_encoder.prev_raw_count = (uint16_t)ENCODER_COUNTER_CENTER;
+    g_encoder.raw_count = (uint16_t)__HAL_TIM_GET_COUNTER(&ENCODER_TIMER);
+    g_encoder.prev_raw_count = g_encoder.raw_count;
     g_encoder.delta_count = 0;
     g_encoder.accum_count = 0;
     g_encoder.offset_count = 0;

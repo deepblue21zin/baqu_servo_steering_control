@@ -4,8 +4,6 @@
 
 #include <math.h>
 
-#define POSITION_SAFETY_ANGLE_MARGIN_DEG 5.0f
-
 static SafetyLimits_t position_control_safety_limits = {
     .max_error_allowed = MAX_TRACKING_ERROR_DEG,
     .max_velocity = 0.0f,

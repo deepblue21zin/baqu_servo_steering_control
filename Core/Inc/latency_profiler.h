@@ -1,29 +1,10 @@
 #ifndef LATENCY_PROFILER_H
 #define LATENCY_PROFILER_H
 
+#include "project_params.h"
+
 #include <stdbool.h>
 #include <stdint.h>
-
-/* Build-time switches */
-#ifndef LATENCY_PROFILER_ENABLE
-#define LATENCY_PROFILER_ENABLE 1
-#endif
-
-#ifndef LATENCY_LOG_ENABLE
-#define LATENCY_LOG_ENABLE 0
-#endif
-
-#ifndef LATENCY_MAX_SAMPLES
-#define LATENCY_MAX_SAMPLES 2048U
-#endif
-
-#ifndef LATENCY_AUTO_REPORT_ENABLE
-#define LATENCY_AUTO_REPORT_ENABLE 1
-#endif
-
-#ifndef LATENCY_AUTO_REPORT_SAMPLES
-#define LATENCY_AUTO_REPORT_SAMPLES 2000U
-#endif
 
 typedef enum {
     LAT_STAGE_SENSE = 0,

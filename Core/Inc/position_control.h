@@ -1,23 +1,10 @@
 #ifndef POSITION_CONTROL_H
 #define POSITION_CONTROL_H
 
+#include "project_params.h"
+
 #include <stdbool.h>
 #include <stdint.h>
-
-#define CONTROL_PERIOD_MS       1
-#define MAX_ANGLE_DEG           4320.0f
-#define MIN_ANGLE_DEG          -4320.0f
-#define MAX_TRACKING_ERROR_DEG  4500.0f
-#define POSITION_TOLERANCE      0.5f
-
-#define DEFAULT_KP              500.0f
-#define DEFAULT_KI              5.0f
-#define DEFAULT_KD              20.0f
-#define DEFAULT_INTEGRAL_LIMIT  1000.0f
-#define DEFAULT_OUTPUT_LIMIT    10000.0f
-
-#define STABLE_ERROR_THRESHOLD  0.5f
-#define STABLE_TIME_MS          100U
 
 typedef enum {
     POS_CTRL_OK = 0,
