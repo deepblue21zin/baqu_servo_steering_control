@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ethernet &amp; System Integration Assignment Brief</title>
+  <link rel="stylesheet" href="member_brief.css">
+</head>
+<body>
+  <main class="page">
+    <div class="back-row">
+      <a class="back-link" href="../README.md">Doc index</a>
+      <a class="back-link" href="../steering_portal/index.html">Steering portal</a>
+      <a class="back-link" href="../REQ/steering_project_req_ownership_guide.html">REQ guide</a>
+    </div>
+
+    <header class="hero">
+      <p class="eyebrow">Member Brief</p>
+      <h1>Ethernet / System Integration 담당 상세 할당서</h1>
+      <p>
+        이 문서는 `ethernet_communication.c`와 `app_runtime.c`의 mode transition, timeout, keyboard/UDP 통합을 맡는 팀원이
+        어떤 부분을 다음 단계에서 닫아야 하는지 정리한 문서다.
+        현재 UDP 수신과 mode 변경 자체는 구현돼 있지만, <span class="strong">system mode contract, ready gating, packet health, recovery policy</span>는 아직 약하다.
+      </p>
+      <div class="chip-row">
+        <span class="chip">Owner: Communication &amp; System Integration</span>
+        <span class="chip">관련 상위 REQ: REQ-P1-003</span>
+        <span class="chip">기준 코드: 2026-03-30</span>
+      </div>
+
+      <div class="hero-grid section">
+        <article class="hero-card">
+          <h3>이번 주 바로 맡길 일</h3>
+          <ol>
+            <li>keyboard / UDP / startup / estop를 하나의 system mode 표로 먼저 고정한다.</li>
+            <li>UDP mode 전환이 곧바로 `Enable()`로 이어지는 부분에 ready gate를 넣는다.</li>
+            <li>packet reject reason, timeout reason, source trace를 로그로 남긴다.</li>
+          </ol>
+        </article>
+        <article class="hero-card">
+          <h3>현재 코드의 강점</h3>
+          <p>
+            UDP path는 이미 ASMS 5B, PC 9B 두 패킷을 구분해서 받고, `AUTO/MANUAL/ESTOP` 모드와 timeout 기반 fail-safe도 최소한 구현되어 있다.
+            즉 이 파트는 파서 작성보다 system contract 정리가 더 중요하다.
+          </p>
+        </article>
+        <article class="hero-card">
+          <h3>가장 큰 리스크</h3>
+          <p>
+            지금은 `AUTO/MANUAL`로 들어오면 `app_runtime.c`가 바로 emergency release와 control enable을 수행한다.
+            따라서 startup, homing, ready 상태와 통신 mode가 아직 분리되지 않았다.
+          </p>
+        </article>
+      </div>
+    </header>
+
+    <section class="panel">
+      <p class="eyebrow">Current Baseline</p>
+      <h2>현재 코드에서 이미 구현된 것</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>파일</th>
+            <th>현재 구현</th>
+            <th>이미 되는 점</th>
+            <th>아직 부족한 점</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mono">Core/Src/ethernet_communication.c</td>
+            <td>ASMS 5B와 PC 9B UDP 패킷을 sender IP 마지막 옥텟과 길이 기준으로 구분하고 `AutoDrive_Packet_t`와 `SteerMode_t`로 정규화한다.</td>
+            <td>manual joystick, auto steer, estop bit 처리와 300 ms 수신 timeout 기준의 최소 통신 경로가 있다.</td>
+            <td>packet sequence, version, CRC, reject reason, health counter, config 분리가 없다. sender/packet 규격이 하드코딩되어 있다.</td>
+          </tr>
+          <tr>
+            <td class="mono">Core/Src/app_runtime.c</td>
+            <td>`AppRuntime_ServiceUdpComms()`가 timeout을 ESTOP으로 바꾸고, mode 전환에 따라 disable / enable / emergency stop을 수행한다.</td>
+            <td>mode change와 target apply의 실질 동작은 이미 있다.</td>
+            <td>ready / homing / arm contract 없이 `AUTO/MANUAL` 진입이 곧바로 enable로 이어진다. transition log도 빈약하다.</td>
+          </tr>
+          <tr>
+            <td class="mono">Core/Inc/ethernet_communication.h</td>
+            <td>UDP API와 legacy text-command API를 동시에 선언한다.</td>
+            <td>추상 API 레이어가 남아 있어 확장 여지는 있다.</td>
+            <td>legacy API는 실제 드라이버가 연결되지 않아 현재는 사실상 비활성인데, 헤더만 보면 동작하는 것처럼 보일 수 있다.</td>
+          </tr>
+          <tr>
+            <td class="mono">Core/Src/ethernet_communication.c (legacy path)</td>
+            <td>`EthComm_Init/Update/HandleLine`가 남아 있지만 `ReadRxByte()`는 항상 RX_FAIL을 반환한다.</td>
+            <td>벤치용 서비스 인터페이스를 남겨둔 흔적은 있다.</td>
+            <td>실제 송수신 경로가 없어 유지/삭제/대체 방향을 정해야 한다.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Gap Analysis</p>
+      <h2>지금 상태가 왜 부족한가</h2>
+      <div class="issue-grid">
+        <article class="issue-card critical">
+          <h3>통신 모드와 시스템 준비 상태가 섞여 있다</h3>
+          <p>
+            지금은 `AUTO/MANUAL`이면 바로 control enable로 가고, `NONE/ESTOP`이면 disable 또는 emergency stop으로 간다.
+            통신 모드와 운전 허가 상태가 같은 축에서 관리되고 있어 safety contract가 약하다.
+          </p>
+        </article>
+        <article class="issue-card critical">
+          <h3>통신 health 정보가 너무 적다</h3>
+          <p>
+            마지막 수신 tick과 emergency request 외에 packet health, source trace, reject statistics가 없다.
+            현장에서 왜 timeout이 났는지, 누가 마지막 target을 보냈는지 복원하기 어렵다.
+          </p>
+        </article>
+        <article class="issue-card warning">
+          <h3>패킷 계약이 하드코딩되어 있다</h3>
+          <p>
+            ASMS `.5`, PC `.1`, 고정 길이, mode bit 해석이 코드에 박혀 있다.
+            현재는 빠르지만 향후 시스템 변경과 테스트 자동화에는 불리하다.
+          </p>
+        </article>
+        <article class="issue-card warning">
+          <h3>Legacy API가 현재 상태를 흐릴 수 있다</h3>
+          <p>
+            text-command API는 선언은 풍부하지만 실제 transport가 없다.
+            유지할지 제거할지, service path로 살릴지 정책이 필요하다.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Detailed REQ</p>
+      <h2>팀원에게 그대로 넘길 실행형 요구사항</h2>
+      <div class="req-grid">
+        <article class="req-card">
+          <div class="req-top"><span class="priority p0">P0</span><span class="req-id">REQ-INT-001</span></div>
+          <h3>System mode state table을 먼저 고정한다</h3>
+          <p><span class="strong">현재 구현:</span> `NONE/AUTO/MANUAL/ESTOP`가 `app_runtime.c` 안에서 직접 enable/disable/emergency로 매핑된다.</p>
+          <p><span class="strong">왜 부족한가:</span> startup, homing, ready, arm, run이 통신 mode와 분리되지 않아 시스템 설명이 어렵다.</p>
+          <p><span class="strong">개선 방향:</span> `communication mode`와 `system state`를 별도 표로 정의하고, mode는 intent만 전달하며 실제 run 허가는 startup state machine이 맡도록 바꾼다.</p>
+          <p><span class="strong">완료 기준:</span> keyboard/UDP/startup/estop 조합표 한 장으로 모든 전이를 설명할 수 있다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top"><span class="priority p0">P0</span><span class="req-id">REQ-INT-002</span></div>
+          <h3>UDP mode 전환에는 ready / homing gate를 넣는다</h3>
+          <p><span class="strong">현재 구현:</span> `AUTO/MANUAL` 진입 시 `Relay_EmergencyRelease()`와 `PositionControl_Enable()`가 직접 호출된다.</p>
+          <p><span class="strong">왜 부족한가:</span> 통신 패킷 하나로 운전 허가까지 열리면 startup safety가 약해진다.</p>
+          <p><span class="strong">개선 방향:</span> `READY`와 `ARMED` 상태가 만족될 때만 control enable이 열리게 하고, 그렇지 않으면 mode는 받아도 run은 거부한다.</p>
+          <p><span class="strong">완료 기준:</span> homing 전, fault latch 중, manual arm 전에는 AUTO/MANUAL 패킷이 와도 run 진입이 차단된다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top"><span class="priority p1">P1</span><span class="req-id">REQ-INT-003</span></div>
+          <h3>Packet health와 reject reason을 남긴다</h3>
+          <p><span class="strong">현재 구현:</span> 마지막 수신 tick만 있고 reject counter나 source trace는 없다.</p>
+          <p><span class="strong">왜 부족한가:</span> timeout이나 ignored packet이 생겨도 왜 버렸는지 추적하기 어렵다.</p>
+          <p><span class="strong">개선 방향:</span> `last_source`, `last_accept_tick`, `reject_reason`, `bad_length_count`, `bad_sender_count`, `mode_mismatch_count` 같은 health counters를 둔다.</p>
+          <p><span class="strong">완료 기준:</span> packet 하나가 무시되었을 때 UART/CSV에서 이유를 확인할 수 있다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top"><span class="priority p1">P1</span><span class="req-id">REQ-INT-004</span></div>
+          <h3>Packet contract를 설정 가능하게 정리한다</h3>
+          <p><span class="strong">현재 구현:</span> sender IP 마지막 옥텟과 packet 길이가 소스에 하드코딩되어 있다.</p>
+          <p><span class="strong">왜 부족한가:</span> 테스트 환경과 실차/벤치 환경이 바뀌면 코드 수정이 필요하다.</p>
+          <p><span class="strong">개선 방향:</span> packet spec, sender allow-list, timeout, joystick mapping을 header 또는 config table로 분리한다.</p>
+          <p><span class="strong">완료 기준:</span> 코드 본문을 뜯지 않고도 packet 규격과 허용 sender를 바꿀 수 있다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top"><span class="priority p1">P1</span><span class="req-id">REQ-INT-005</span></div>
+          <h3>Recovery와 comm timeout clear 절차를 만든다</h3>
+          <p><span class="strong">현재 구현:</span> timeout은 곧바로 ESTOP으로 보내지만, clear와 re-entry 절차는 얇다.</p>
+          <p><span class="strong">왜 부족한가:</span> 통신이 잠깐 복구되었다고 즉시 다시 움직이면 위험하다.</p>
+          <p><span class="strong">개선 방향:</span> timeout 후 recovery precondition, operator clear, packet health 재확인 절차를 state machine과 연결한다.</p>
+          <p><span class="strong">완료 기준:</span> timeout 후 clear 절차 없이 자동 복귀하지 않고, recovery log가 남는다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top"><span class="priority p2">P2</span><span class="req-id">REQ-INT-006</span></div>
+          <h3>Legacy service API의 역할을 정리한다</h3>
+          <p><span class="strong">현재 구현:</span> text-command API는 존재하지만 실제 transport는 연결돼 있지 않다.</p>
+          <p><span class="strong">왜 부족한가:</span> 유지 가치가 불명확하면 코드 독해와 테스트 ownership이 흐려진다.</p>
+          <p><span class="strong">개선 방향:</span> 벤치 서비스 채널로 살릴지, 제거할지, UART service layer로 대체할지를 문서와 코드에서 명시한다.</p>
+          <p><span class="strong">완료 기준:</span> 헤더를 보는 사람도 현재 active path와 legacy path를 혼동하지 않는다.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Evidence</p>
+      <h2>이 파트의 완료 증거로 받아야 하는 것</h2>
+      <div class="evidence-grid">
+        <article class="evidence-card">
+          <h3>로그</h3>
+          <ul>
+            <li>mode transition log</li>
+            <li>packet reject reason log</li>
+            <li>timeout and recovery log</li>
+          </ul>
+        </article>
+        <article class="evidence-card">
+          <h3>문서</h3>
+          <ul>
+            <li>system mode state table</li>
+            <li>packet contract 표</li>
+            <li>recovery precondition 표</li>
+          </ul>
+        </article>
+        <article class="evidence-card">
+          <h3>시험</h3>
+          <ul>
+            <li>AUTO/MANUAL/NONE/ESTOP mode sequence</li>
+            <li>300 ms timeout negative test</li>
+            <li>bad sender / bad length packet test</li>
+          </ul>
+        </article>
+      </div>
+      <div class="note">
+        이 파트의 핵심은 "UDP를 받는다"가 아니라
+        <span class="strong">통신 의도, 시스템 상태, 안전 허가가 서로 충돌하지 않게 묶는 것</span>이다.
+      </div>
+    </section>
+
+    <div class="footer">
+      Last updated: 2026-03-30<br>
+      Source baseline: `ethernet_communication.c`, `ethernet_communication.h`, `app_runtime.c`
+    </div>
+  </main>
+</body>
+</html>

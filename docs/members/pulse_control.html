@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pulse Control Assignment Brief</title>
+  <link rel="stylesheet" href="member_brief.css">
+</head>
+<body>
+  <main class="page">
+    <div class="back-row">
+      <a class="back-link" href="../README.md">Doc index</a>
+      <a class="back-link" href="../steering_portal/index.html">Steering portal</a>
+      <a class="back-link" href="../putty/index.html">PuTTY live viewer</a>
+    </div>
+
+    <header class="hero">
+      <p class="eyebrow">Member Brief</p>
+      <h1>Pulse Control 담당 상세 할당서</h1>
+      <p>
+        이 문서는 `pulse_control.c`를 맡는 팀원이 다음으로 무엇을 닫아야 하는지 현재 코드 사실 위에서 정리한 문서다.
+        지금은 PE9 pulse, PE10 direction, reverse guard, requested/applied status까지 구현돼 있어 actuator interface의 뼈대는 좋다.
+        하지만 <span class="strong">ready gate, residual pulse 기준, step/continuous contract, hardware evidence</span>가 아직 부족하다.
+      </p>
+      <div class="chip-row">
+        <span class="chip">Owner: Pulse / Driver Timing</span>
+        <span class="chip">관련 상위 REQ: REQ-P0-002</span>
+        <span class="chip">관련 상위 REQ: REQ-P1-001</span>
+        <span class="chip">관련 상위 REQ: REQ-P2-001</span>
+      </div>
+
+      <div class="hero-grid section">
+        <article class="hero-card">
+          <h3>이번 주 바로 맡길 일</h3>
+          <ol>
+            <li>현재 runtime contract를 `100000 Hz clamp + 1 ms reverse guard` 기준으로 문서/코드에 통일한다.</li>
+            <li>ready / servo / emg / control enable과 pulse inhibit 조건을 연결한다.</li>
+            <li>`PE9`, `PE10`, `[ENCDBG]`, drive monitor를 한 장면으로 묶는 검증 matrix를 만든다.</li>
+          </ol>
+        </article>
+        <article class="hero-card">
+          <h3>왜 이 파트가 중요하나</h3>
+          <p>
+            controller가 출력한 signed command가 실제 servo drive가 받아들일 수 있는 파형으로 바뀌는 구간이 바로 여기다.
+            센서나 제어기 문제가 아니라도 pulse contract가 흐리면 전체 시스템이 흔들린다.
+          </p>
+        </article>
+        <article class="hero-card">
+          <h3>현재 코드의 강점</h3>
+          <p>
+            TIM1 actual clock 계산, direction polarity macro, line-driver enable, reverse guard,
+            requested/applied Hz status가 이미 있어 기본 actuator interface는 상당히 좋아졌다.
+            다음 단계는 기능 추가보다 운영 계약과 증거 체계를 닫는 일이다.
+          </p>
+        </article>
+      </div>
+    </header>
+
+    <section class="panel">
+      <p class="eyebrow">Current Baseline</p>
+      <h2>현재 코드에서 이미 구현된 것</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>파일</th>
+            <th>현재 구현</th>
+            <th>이미 되는 점</th>
+            <th>아직 부족한 점</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mono">Core/Src/pulse_control.c</td>
+            <td>`PE9(TIM1_CH1)` pulse, `PE10` direction, shared line-driver enable, 10~100000Hz clamp, 1ms reverse guard를 구현한다.</td>
+            <td>continuous frequency path와 `requested_frequency_hz / applied_frequency_hz / reverse_guard_active` status가 이미 있다.</td>
+            <td>system ready나 relay state와 직접 연결된 output gate가 없다. reverse / stop 후 residual pulse 허용 기준도 문서화돼 있지 않다.</td>
+          </tr>
+          <tr>
+            <td class="mono">Core/Inc/pulse_control.h</td>
+            <td>`PulseControl_Status_t`가 `requested`, `applied`, `arr`, `compare`, `direction`, `output_active`, `busy`를 제공한다.</td>
+            <td>현재 출력 상태를 런타임에서 비교적 잘 재구성할 수 있다.</td>
+            <td>`last_stop_reason`, `gate_reason`, `mode`, `last_reverse_reason` 같은 triage 정보가 없다.</td>
+          </tr>
+          <tr>
+            <td class="mono">Core/Src/app_runtime.c</td>
+            <td>CSV와 keyboard snapshot에서 `REQ`, `AP`, `RUN`, `REV`, `DIR`을 같이 기록한다.</td>
+            <td>bench에서 actuator 상태를 로그로 확인할 수 있다.</td>
+            <td>scope / drive monitor / encoder evidence를 같은 실험 세트로 묶는 규칙이 아직 없다.</td>
+          </tr>
+          <tr>
+            <td class="mono">Core/Inc/constants.h</td>
+            <td>`MAX_PULSE_FREQ`가 1000000으로 남아 있다.</td>
+            <td>future design target을 남겨 둔 흔적으로는 볼 수 있다.</td>
+            <td>현재 runtime clamp 100000Hz와 분리 표기가 없어 현장 설명 시 혼선을 준다.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Gap Analysis</p>
+      <h2>지금 상태가 왜 부족한가</h2>
+      <div class="issue-grid">
+        <article class="issue-card critical">
+          <h3>Current contract가 하나로 정리돼 있지 않다</h3>
+          <p>
+            코드 한쪽은 100kHz clamp를 쓰고 다른 문맥에서는 1MHz 상수가 남아 있어,
+            "지금 실제로 얼마까지 안전하게 쓸 수 있나"를 한 문장으로 답하기 어렵다.
+          </p>
+        </article>
+        <article class="issue-card critical">
+          <h3>Ready gate가 actuator까지 내려오지 않았다</h3>
+          <p>
+            startup, homing, relay, estop 정책이 pulse output inhibit 조건으로 아직 닫히지 않았다.
+            상위가 실수해도 여기서 한 번 더 막아줄 방어선이 필요하다.
+          </p>
+        </article>
+        <article class="issue-card warning">
+          <h3>Mode contract가 아직 얇다</h3>
+          <p>
+            continuous와 step mode가 같은 타이머를 쓰지만, 어떤 시점에 누가 ownership을 가지는지,
+            step mode 주파수 기준이 무엇인지 명확하지 않다.
+          </p>
+        </article>
+        <article class="issue-card warning">
+          <h3>Waveform evidence가 시스템 증거로 묶여 있지 않다</h3>
+          <p>
+            requested / applied 숫자만으로는 충분하지 않다.
+            `PE9`, `PE10`, drive monitor, real encoder 응답을 같은 기준으로 캡처해야 actuator closure라고 말할 수 있다.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Detailed REQ</p>
+      <h2>팀원에게 그대로 넘길 실행형 요구사항</h2>
+      <div class="req-grid">
+        <article class="req-card">
+          <div class="req-top">
+            <span class="priority p0">P0</span>
+            <span class="req-id">REQ-PULSE-001</span>
+          </div>
+          <h3>Current runtime pulse contract를 하나로 고정한다</h3>
+          <p><span class="strong">현재 구현:</span> runtime은 10~100000Hz clamp를 적용하지만 `constants.h`에는 `MAX_PULSE_FREQ = 1000000`이 남아 있다.</p>
+          <p><span class="strong">왜 부족한가:</span> 현재값과 future target이 섞여 있으면 bench 결과 해석과 안전 범위 설명이 흐려진다.</p>
+          <p><span class="strong">개선 방향:</span> current runtime contract와 future design target을 분리해 문서화하고, status / README / portal 설명도 같은 기준으로 맞춘다.</p>
+          <p><span class="strong">완료 기준:</span> 코드, 문서, 포털 어디서 봐도 같은 최대 주파수와 guard time을 말한다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top">
+            <span class="priority p0">P0</span>
+            <span class="req-id">REQ-PULSE-002</span>
+          </div>
+          <h3>Ready / Servo / EMG 조건을 output inhibit로 묶는다</h3>
+          <p><span class="strong">현재 구현:</span> `PulseControl_SetFrequency()`는 자체적으로 direction과 guard를 처리하지만 startup readiness를 직접 보지 않는다.</p>
+          <p><span class="strong">왜 부족한가:</span> 상위 호출 실수나 startup race가 있으면 준비되지 않은 상태에서 pulse가 나갈 수 있다.</p>
+          <p><span class="strong">개선 방향:</span> `system_ready`, `servo_on`, `emg_released`, `control_enabled`, `homing_complete` 같은 gate 입력을 정의하고, output stage에서 최종 inhibit를 건다.</p>
+          <p><span class="strong">완료 기준:</span> `READY=false` 또는 `EMG active`일 때 어떤 frequency 요청도 실제 pulse로 나가지 않는다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top">
+            <span class="priority p0">P0</span>
+            <span class="req-id">REQ-PULSE-003</span>
+          </div>
+          <h3>Reverse / stop timing contract와 residual pulse 기준을 정량화한다</h3>
+          <p><span class="strong">현재 구현:</span> `stop -> 1ms wait -> dir change -> 1ms wait -> restart` 구조의 reverse guard가 있다.</p>
+          <p><span class="strong">왜 부족한가:</span> guard가 있다는 것과 실제 파형에서 glitch가 없는 것은 다르다.</p>
+          <p><span class="strong">개선 방향:</span> reverse, disable, estop 시 residual pulse 허용량과 측정 방법을 정하고 logic analyzer 캡처로 검증한다.</p>
+          <p><span class="strong">완료 기준:</span> 100회 reverse 반복에서 glitch count와 residual pulse가 허용 기준을 만족한다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top">
+            <span class="priority p1">P1</span>
+            <span class="req-id">REQ-PULSE-004</span>
+          </div>
+          <h3>Status 구조체를 triage 가능한 수준으로 확장한다</h3>
+          <p><span class="strong">현재 구현:</span> status는 requested/applied/ARR/CCR/direction/busy를 제공한다.</p>
+          <p><span class="strong">왜 부족한가:</span> 문제가 생겼을 때 왜 멈췄는지, 왜 gate 되었는지, step인지 continuous인지 구분하기 어렵다.</p>
+          <p><span class="strong">개선 방향:</span> `last_stop_reason`, `last_reverse_reason`, `gate_reason`, `mode`, `line_driver_state`를 추가해 사후 분석 가능성을 높인다.</p>
+          <p><span class="strong">완료 기준:</span> UART snapshot 하나로 actuator 상태 전이를 재구성할 수 있다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top">
+            <span class="priority p1">P1</span>
+            <span class="req-id">REQ-PULSE-005</span>
+          </div>
+          <h3>Continuous mode와 step mode의 경계를 명확히 한다</h3>
+          <p><span class="strong">현재 구현:</span> `PulseControl_SendSteps()`가 존재하지만 별도 step frequency 입력이나 mode ownership 문서가 없다.</p>
+          <p><span class="strong">왜 부족한가:</span> 같은 타이머를 두 모드가 공유할 때 stop/start 시 꼬임이 생기기 쉽다.</p>
+          <p><span class="strong">개선 방향:</span> mode enum, busy semantics, transition rule, explicit step frequency 또는 기본값 정책을 정의한다.</p>
+          <p><span class="strong">완료 기준:</span> mode transition negative test에서 continuous와 step이 동시에 타이머를 건드리지 않는다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top">
+            <span class="priority p2">P2</span>
+            <span class="req-id">REQ-PULSE-006</span>
+          </div>
+          <h3>Actuator closure evidence pack을 만든다</h3>
+          <p><span class="strong">현재 구현:</span> 로그는 좋지만 scope, drive monitor, real encoder evidence가 같은 matrix로 정리돼 있지 않다.</p>
+          <p><span class="strong">왜 부족한가:</span> 현재 bench 병목이 actuator path인지 sensor truth인지 빠르게 분리하려면 같은 기준의 증거 묶음이 필요하다.</p>
+          <p><span class="strong">개선 방향:</span> `100Hz / 1kHz / 10kHz / stop / reverse / estop` 실험별로 `requested`, `applied`, `PE9`, `PE10`, `ENCDBG`, drive monitor를 같이 캡처한다.</p>
+          <p><span class="strong">완료 기준:</span> wave matrix 1장과 대표 캡처 세트만으로 actuator path 상태를 설명할 수 있다.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Evidence</p>
+      <h2>이 파트의 완료 증거로 받아야 하는 것</h2>
+      <div class="evidence-grid">
+        <article class="evidence-card">
+          <h3>파형</h3>
+          <ul>
+            <li>`PE9` low / mid / high frequency 캡처</li>
+            <li>`PE9 + PE10` reverse guard 동시 캡처</li>
+            <li>disable / estop stop latency 캡처</li>
+          </ul>
+        </article>
+        <article class="evidence-card">
+          <h3>로그</h3>
+          <ul>
+            <li>`requested_hz` vs `applied_hz` 비교 표</li>
+            <li>gate reason / stop reason snapshot</li>
+            <li>`ENCDBG`와 drive monitor 동시 비교 로그</li>
+          </ul>
+        </article>
+        <article class="evidence-card">
+          <h3>문서</h3>
+          <ul>
+            <li>current runtime pulse contract 표</li>
+            <li>output inhibit truth table</li>
+            <li>mode transition contract</li>
+          </ul>
+        </article>
+      </div>
+      <div class="note">
+        이 파트의 핵심은 "pulse가 나온다"가 아니라
+        <span class="strong">언제 나가도 되고 언제 절대 나가면 안 되는지까지 포함한 actuator contract를 닫는 것</span>이다.
+      </div>
+    </section>
+
+    <div class="footer">
+      Last updated: 2026-03-30<br>
+      Source baseline: `pulse_control.c`, `pulse_control.h`, `app_runtime.c`, `constants.h`
+    </div>
+  </main>
+</body>
+</html>

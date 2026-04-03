@@ -864,6 +864,24 @@ input[type="range"] {
   margin-bottom: 10px;
 }
 
+.team-brief-link {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(33, 92, 147, 0.08);
+  border: 1px solid rgba(33, 92, 147, 0.12);
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.team-brief-link:hover {
+  border-color: rgba(33, 92, 147, 0.26);
+  box-shadow: 0 10px 24px rgba(33, 92, 147, 0.08);
+}
+
 .module-chip {
   cursor: pointer;
   transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;

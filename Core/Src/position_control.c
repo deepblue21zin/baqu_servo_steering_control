@@ -15,14 +15,12 @@ static volatile uint8_t fault_flag = 0U;
 static uint32_t command_next_id = 1U;
 static CommandSource_t pending_command_source = CMD_SRC_NONE;
 
-#define POSITION_COMMAND_TIMEOUT_MS 0U
-
 static PID_Params_t pid_params = {
-    .Kp = 50.0f,
-    .Ki = 5.0f,
-    .Kd = 20.0f,
-    .integral_limit = 1000.0f,
-    .output_limit = 10000.0f
+    .Kp = DEFAULT_KP,
+    .Ki = DEFAULT_KI,
+    .Kd = DEFAULT_KD,
+    .integral_limit = DEFAULT_INTEGRAL_LIMIT,
+    .output_limit = DEFAULT_OUTPUT_LIMIT
 };
 
 static struct {

@@ -7,7 +7,7 @@ const portalData = {
     { label: "Loop period", value: "1 ms", note: "SysTick based control loop" },
     { label: "Runtime split", value: "main -> app", note: "boot entry and app supervisor are now separated" },
     { label: "Encoder mode", value: "TIM2 + virtual option", note: "PA0/PB3 real path with optional pulse-integrated bench feedback" },
-    { label: "Bench default", value: "ENCDBG ON", note: "keyboard bench + real TIM2 diag, virtual feedback OFF" }
+    { label: "Bench default", value: "ENCDBG ON", note: "keyboard bench + real TIM2 diag, virtual feedback OFF, Doc/putty live viewer와 MATLAB/Simulink 적용 계획 문서가 준비돼 있다" }
   ],
   latency: [
     { name: "Sense", avg: 3.344, p99: 3.372 },
@@ -36,7 +36,7 @@ const portalData = {
       {
         name: "Observability / Evidence",
         score: 90,
-        detail: "CSV, keyboard snapshot, command lifecycle log, latency batch, portal, change log까지 이어져 있어 분석 가능한 증거 체계가 강하다. 특히 diagnostic 계층 분리로 상태 문자열과 debug var 경로가 더 읽기 쉬워졌다."
+        detail: "CSV, keyboard snapshot, command lifecycle log, latency batch, portal, change log에 더해 Doc/putty live viewer와 bridge launcher까지 이어져 있어 분석 가능한 증거 체계가 강하다. 특히 diagnostic 계층 분리로 상태 문자열과 debug var 경로가 더 읽기 쉬워졌다."
       },
       {
         name: "Actuator Interface",
@@ -286,42 +286,54 @@ const portalData = {
       title: "Motion Control & Fault Manager",
       scope: "position_control.c, lifecycle, timeout, fault reason",
       deliverable: "fault latch, clear policy, wrong-direction / stale sensor diagnostics",
-      evidence: "state transition log, timeout case, fault injection trace"
+      evidence: "state transition log, timeout case, fault injection trace",
+      brief: "../members/position_control.html",
+      briefLabel: "상세 할당서"
     },
     {
       owner: "Team B",
       title: "Startup / Homing / Relay Safety",
       scope: "homing.c, relay_control.c, startup gating",
       deliverable: "INIT -> READY -> ARMED -> RUN contract and recovery sequence",
-      evidence: "startup GPIO trace, ready/arm log, homing fallback flow"
+      evidence: "startup GPIO trace, ready/arm log, homing fallback flow",
+      brief: "../members/homing_relay.html",
+      briefLabel: "상세 할당서"
     },
     {
       owner: "Team C",
       title: "Sensor Integrity",
       scope: "encoder_reader.c, adc_potentiometer.c, count/angle health",
       deliverable: "unwrap validation, stale detection, encoder-ADC cross-check",
-      evidence: "long-run encoder log, mismatch detection trace, sign verification"
+      evidence: "long-run encoder log, mismatch detection trace, sign verification",
+      brief: "../members/adc_encoder.html",
+      briefLabel: "상세 할당서"
     },
     {
       owner: "Team D",
       title: "Pulse / Direction / Driver Timing",
       scope: "pulse_control.c, TIM1 contract, PF/PR path, drive monitor",
       deliverable: "requested/applied Hz contract, real encoder `[ENCDBG]` closure, reverse-guard wave proof",
-      evidence: "scope capture, drive monitor table, commanded vs applied frequency report"
+      evidence: "scope capture, drive monitor table, commanded vs applied frequency report",
+      brief: "../members/pulse_control.html",
+      briefLabel: "상세 할당서"
     },
     {
       owner: "Team E",
       title: "Communication & System Integration",
       scope: "ethernet_communication.c, app_runtime.c mode transitions, timeout behavior",
       deliverable: "keyboard/UDP/system mode contract and recovery gating",
-      evidence: "mode transition log, timeout fail-safe proof, packet-to-target trace"
+      evidence: "mode transition log, timeout fail-safe proof, packet-to-target trace",
+      brief: "../members/ethernet_integration.html",
+      briefLabel: "상세 할당서"
     },
     {
       owner: "Team F",
       title: "Verification & Tooling",
       scope: "latency_profiler.c, position_control_diag.c, debug_vars, plotting scripts, documentation portal",
-      deliverable: "evidence automation, async logging support, portal maintenance",
-      evidence: "latency report, PNG plots, portal snapshot, submission-ready artifact set"
+      deliverable: "evidence automation, async logging support, portal maintenance, PuTTY live viewer and bridge upkeep",
+      evidence: "latency report, PNG plots, portal snapshot, live viewer recording JSON, bridge launcher, submission-ready artifact set",
+      brief: "../members/verification_tooling.html",
+      briefLabel: "상세 할당서"
     }
   ],
   modules: [
@@ -795,6 +807,11 @@ function renderTeams() {
     card.append(makeEl("p", "", team.scope));
     card.append(makeEl("p", "caption", `Deliverable: ${team.deliverable}`));
     card.append(makeEl("p", "caption", `Evidence: ${team.evidence}`));
+    if (team.brief) {
+      const link = makeEl("a", "team-brief-link", team.briefLabel || "상세 할당서");
+      link.href = team.brief;
+      card.append(link);
+    }
     host.append(card);
   });
 }
