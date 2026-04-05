@@ -450,7 +450,7 @@ void EthComm_UDP_Init(void)
     }
 
     udp_recv(g_udp_pcb, udp_recv_cb, NULL);
-    ETHCOMM_LOG("[EthComm] UDP ready  PORT:%d\r\n", AUTODRIVE_UDP_PORT);
+    ETHCOMM_LOG("[EthComm] UDP ready  PORT:%u\r\n", (unsigned int)AUTODRIVE_UDP_PORT);
 }
 
 /**

@@ -409,6 +409,7 @@
             <h3>분석 절차</h3>
             <ol class="number-list">
               <li>UART raw log를 PuTTY session log로 저장한다.</li>
+              <li>`../putty/index.html` 또는 `putty_log/start_putty_live_viewer.ps1`로 PuTTY live viewer를 열어 타입별 분류, bridge live, recording 저장을 먼저 본다.</li>
               <li>`python putty_log/plot_putty_log.py ...`로 control / latency plot을 생성한다.</li>
               <li>`target`, `current`, `error`, `output`, `dir`, `enc`를 먼저 본다.</li>
               <li>그 다음 `LATENCY_STAGE`와 deadline miss를 붙여 timing evidence를 만든다.</li>
@@ -529,6 +530,7 @@
           <h2>구현해야 하는 REQ를 팀원 6명으로 분배</h2>
           <p class="section-copy">
             기존 A-D 분석 문서를 기반으로, 실제 개발 운영이 쉬운 6개 워크스트림으로 확장했다.
+            현재는 Team A부터 F까지 각 카드에서 상세 할당서 HTML로 바로 들어갈 수 있다.
           </p>
         </div>
         <div id="team-grid" class="team-grid"></div>
@@ -588,9 +590,41 @@
             <strong>Doxygen Home</strong>
             <span>구조체와 타입 중심 탐색</span>
           </a>
+          <a class="link-card" href="../putty/index.html">
+            <strong>PuTTY Live Viewer</strong>
+            <span>`putty.log` bridge live, record split, interpretation, recording export</span>
+          </a>
           <a class="link-card" href="../README.md">
             <strong>Documentation Index</strong>
             <span>README, REQ, member docs, latency docs</span>
+          </a>
+          <a class="link-card" href="../matlab_simulink_application_plan.md">
+            <strong>MATLAB / Simulink Plan</strong>
+            <span>shadow model, export-function, target monitor 적용 순서</span>
+          </a>
+          <a class="link-card" href="../members/position_control.html">
+            <strong>Position Control Brief</strong>
+            <span>fault manager, enable gate, deadband, tuning evidence 요구사항</span>
+          </a>
+          <a class="link-card" href="../members/adc_encoder.html">
+            <strong>ADC + Encoder Brief</strong>
+            <span>현재 구현, 부족한 점, 센서 담당 상세 REQ</span>
+          </a>
+          <a class="link-card" href="../members/pulse_control.html">
+            <strong>Pulse Control Brief</strong>
+            <span>actuator contract, gate, waveform evidence 요구사항</span>
+          </a>
+          <a class="link-card" href="../members/homing_relay.html">
+            <strong>Homing + Relay Brief</strong>
+            <span>startup state machine, homing gate, relay truth table 요구사항</span>
+          </a>
+          <a class="link-card" href="../members/ethernet_integration.html">
+            <strong>Ethernet Integration Brief</strong>
+            <span>UDP mode contract, timeout, system integration 요구사항</span>
+          </a>
+          <a class="link-card" href="../members/verification_tooling.html">
+            <strong>Verification &amp; Tooling Brief</strong>
+            <span>latency, debug vars, plots, portal, evidence automation 요구사항</span>
           </a>
         </div>
       </section>

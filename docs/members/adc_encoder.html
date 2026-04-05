@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ADC + Encoder Assignment Brief</title>
+  <link rel="stylesheet" href="member_brief.css">
+</head>
+<body>
+  <main class="page">
+    <div class="back-row">
+      <a class="back-link" href="../README.md">Doc index</a>
+      <a class="back-link" href="../steering_portal/index.html">Steering portal</a>
+      <a class="back-link" href="../REQ/steering_project_req_ownership_guide.html">REQ guide</a>
+    </div>
+
+    <header class="hero">
+      <p class="eyebrow">Member Brief</p>
+      <h1>ADC + Encoder 담당 상세 할당서</h1>
+      <p>
+        이 문서는 현재 코드 기준으로 센서 담당자가 다음 단계에서 정확히 무엇을 개발해야 하는지 정리한 실행 문서다.
+        핵심 책임은 <span class="strong">제어기가 믿고 써도 되는 sensor truth를 만드는 것</span>이다.
+        지금은 unwrap 기반 count 누적과 ADC validity bit의 뼈대는 있지만,
+        sign contract, stale fault, cross-check, long-run evidence가 아직 닫히지 않았다.
+      </p>
+      <div class="chip-row">
+        <span class="chip">Owner: Sensor Integrity</span>
+        <span class="chip">관련 상위 REQ: REQ-P0-001</span>
+        <span class="chip">관련 상위 REQ: REQ-P1-002</span>
+        <span class="chip">기준 코드: 2026-03-30</span>
+      </div>
+
+      <div class="hero-grid section">
+        <article class="hero-card">
+          <h3>이번 주 바로 맡길 일</h3>
+          <ol>
+            <li>`TIM2(PA0/PB3)` 기준 encoder sign과 축 기준을 표로 먼저 고정한다.</li>
+            <li>`age_ms`와 validity bit를 실제 stale / mismatch 진단으로 연결한다.</li>
+            <li>encoder와 ADC를 같은 축 단위로 맞춰 cross-check 로그를 남긴다.</li>
+          </ol>
+        </article>
+        <article class="hero-card">
+          <h3>왜 이 파트가 급한가</h3>
+          <p>
+            현재 `pulse_control.c`와 controller 출력은 설명 가능한 수준까지 올라왔지만,
+            실제 motion이 맞는지 최종 판단할 authoritative feedback은 아직 약하다.
+            이 파트가 닫혀야 `current_angle`, `fault`, `homing`, `ready` 모두가 신뢰를 갖는다.
+          </p>
+        </article>
+        <article class="hero-card">
+          <h3>현재 코드의 좋은 점</h3>
+          <p>
+            `encoder_reader.c`는 이미 `raw_count`, `delta_count`, `accum_count`, `motor_deg`, `age_ms`를 제공한다.
+            `adc_potentiometer.c`도 `raw`, `voltage`, `calibrated_angle_deg`, `validity` 구조체를 갖고 있어
+            다음 단계는 새 틀을 만드는 것보다 진단 계약을 완성하는 일에 가깝다.
+          </p>
+        </article>
+      </div>
+    </header>
+
+    <section class="panel">
+      <p class="eyebrow">Current Baseline</p>
+      <h2>현재 코드에서 이미 구현된 것</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>파일</th>
+            <th>현재 구현</th>
+            <th>이미 되는 점</th>
+            <th>아직 부족한 점</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mono">Core/Src/encoder_reader.c</td>
+            <td>`TIM2` counter를 읽고 `int16_t signed_delta`로 16bit wrap을 unwrap해 `accum_count`를 만든다.</td>
+            <td>`EncoderSample_t`로 `raw_count`, `delta_count`, `accum_count`, `motor_deg`, `sample_tick_ms`, `age_ms`를 조회할 수 있다.</td>
+            <td>count sign과 실제 물리 회전 방향의 계약이 문서/코드에서 고정돼 있지 않고, stale / implausible motion 판단이 없다.</td>
+          </tr>
+          <tr>
+            <td class="mono">Core/Src/adc_potentiometer.c</td>
+            <td>`ADC_Pot_GetSample()`이 `raw`, `voltage`, `calibrated_angle_deg`, `sample_tick_ms`, `age_ms`, `validity`를 채운다.</td>
+            <td>`NOT_INIT`, `DISCONNECT`, `STUCK`, `JUMP`, `RANGE` bit 기반 진단 틀이 이미 있다.</td>
+            <td>`ADC_POT_INVALID_TIMEOUT`는 header에 있지만 현재 코드에서는 실제로 세팅되지 않는다. 변환도 blocking poll 기반이고 calibration persistence가 없다.</td>
+          </tr>
+          <tr>
+            <td class="mono">Core/Src/homing.c</td>
+            <td>ADC 각도를 steering 축 기준으로 읽고 `SteeringDegToMotorDeg()`로 motor 축으로 바꾼 뒤 encoder offset을 적용한다.</td>
+            <td>ADC absolute reference를 encoder offset과 연결하는 최소 흐름은 이미 있다.</td>
+            <td>ADC validity bit를 검사하지 않고, homing validation도 없고, runtime cross-check와 연결되지 않는다.</td>
+          </tr>
+          <tr>
+            <td class="mono">Core/Src/app_runtime.c</td>
+            <td>주기 CSV와 `[ENCDBG]` 로그로 real `TIM2` count / delta / A / B 상태를 계속 남긴다.</td>
+            <td>bench에서 raw encoder hardware truth를 볼 수 있는 관찰 경로는 이미 있다.</td>
+            <td>센서 validity가 상위 ready/fault 정책으로 아직 이어지지 않는다. virtual feedback과 real encoder 구분도 해석자가 직접 해야 한다.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Gap Analysis</p>
+      <h2>지금 상태가 왜 부족한가</h2>
+      <div class="issue-grid">
+        <article class="issue-card critical">
+          <h3>Sign truth가 아직 확정되지 않았다</h3>
+          <p>
+            `accum_count`는 생겼지만, `+encoder_count`, `+motor_deg`, `DIR=1`이 실제 어떤 방향인지 end-to-end로 고정돼 있지 않다.
+            이 상태에서는 controller 문제인지 sensor polarity 문제인지 분리가 늦어진다.
+          </p>
+        </article>
+        <article class="issue-card critical">
+          <h3>Freshness 정보는 있지만 fault로 쓰이지 않는다</h3>
+          <p>
+            `age_ms`와 timestamp는 이미 제공되는데, 일정 시간 갱신이 없을 때 stale warning / fault로 올리는 정책이 없다.
+            즉 정보는 있지만 운영 계약이 아직 없다.
+          </p>
+        </article>
+        <article class="issue-card warning">
+          <h3>ADC validity는 부분적이다</h3>
+          <p>
+            disconnect / jump / stuck 비트는 있지만 calibration version, checksum, reboot 복원,
+            non-blocking sampling 정책이 없다. `HAL_ADC_PollForConversion(..., 100U)`와 `HAL_Delay(3000U)`는 1ms loop 철학과 어울리지 않는다.
+          </p>
+        </article>
+        <article class="issue-card warning">
+          <h3>Cross-check가 없다</h3>
+          <p>
+            ADC와 encoder가 둘 다 존재하지만 현재는 서로 검증하지 않는다.
+            homing도 runtime도 결국 단일 센서를 믿는 순간이 생긴다.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Detailed REQ</p>
+      <h2>팀원에게 그대로 넘길 실행형 요구사항</h2>
+      <div class="req-grid">
+        <article class="req-card">
+          <div class="req-top">
+            <span class="priority p0">P0</span>
+            <span class="req-id">REQ-SEN-001</span>
+          </div>
+          <h3>Encoder sign / axis contract를 먼저 고정한다</h3>
+          <p><span class="strong">현재 구현:</span> unwrap count는 동작하지만 sign 정책은 코드와 문서에 명시적으로 고정돼 있지 않다.</p>
+          <p><span class="strong">왜 부족한가:</span> target과 current 부호가 맞는지 확신이 없으면 pulse/direction 문제와 sensor 문제를 분리할 수 없다.</p>
+          <p><span class="strong">개선 방향:</span> `+steering_deg`, `+motor_deg`, `+encoder_count`, `DIR=1`이 의미하는 물리 방향을 표로 정리하고, 필요하면 polarity macro를 도입한다.</p>
+          <p><span class="strong">완료 기준:</span> 손회전 CW/CCW와 `+1deg/-1deg` 명령에서 `ENCDBG`, CSV, snapshot 부호가 모두 기대와 일치한다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top">
+            <span class="priority p0">P0</span>
+            <span class="req-id">REQ-SEN-002</span>
+          </div>
+          <h3>Freshness / stale / timeout contract를 실제 fault로 연결한다</h3>
+          <p><span class="strong">현재 구현:</span> `EncoderSample_t`와 `ADC_PotSample_t` 모두 `sample_tick_ms`, `age_ms`를 가진다.</p>
+          <p><span class="strong">왜 부족한가:</span> age를 계산만 하고 아무도 소비하지 않으므로 센서가 멈춰도 controller가 현재값처럼 믿을 수 있다.</p>
+          <p><span class="strong">개선 방향:</span> encoder, ADC 각각 stale threshold를 정의하고 warning/fault/event log를 만든다. header에만 있는 `ADC_POT_INVALID_TIMEOUT`도 실제 로직으로 연결한다.</p>
+          <p><span class="strong">완료 기준:</span> 센서 입력 정지나 샘플 중단을 주면 bounded time 안에 stale 진단이 발생하고 로그에 reason이 남는다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top">
+            <span class="priority p1">P1</span>
+            <span class="req-id">REQ-SEN-003</span>
+          </div>
+          <h3>Encoder-ADC cross-check를 같은 축 단위로 만든다</h3>
+          <p><span class="strong">현재 구현:</span> homing에서는 ADC를 steering 축 absolute reference로 해석하고, encoder는 motor 축 count를 쓴다.</p>
+          <p><span class="strong">왜 부족한가:</span> 두 센서가 같은 축에서 얼마나 차이 나는지 시스템이 모른다.</p>
+          <p><span class="strong">개선 방향:</span> 비교 기준을 steering 축 또는 motor 축 중 하나로 통일하고, `|encoder - adc|` warning/fault 임계값을 homing 시점과 runtime 시점으로 나눠 정의한다.</p>
+          <p><span class="strong">완료 기준:</span> 정상 상태에서는 허용 오차 안에 유지되고, 인위적 bias를 주면 mismatch 이벤트가 발생한다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top">
+            <span class="priority p1">P1</span>
+            <span class="req-id">REQ-SEN-004</span>
+          </div>
+          <h3>Velocity / acceleration plausibility를 추가한다</h3>
+          <p><span class="strong">현재 구현:</span> count와 delta는 있지만 sensor glitch를 따로 분류하는 속도/가속도 계층이 없다.</p>
+          <p><span class="strong">왜 부족한가:</span> raw jump 한 번이 실제 급가속인지 잡음인지 설명할 수 없다.</p>
+          <p><span class="strong">개선 방향:</span> `delta_count` 기반 velocity estimate와 acceleration estimate를 만들고, 물리적으로 불가능한 급변을 warning/fault로 구분한다.</p>
+          <p><span class="strong">완료 기준:</span> injected jump에서 plausibility 경고가 뜨고, 정상 저속 sweep에서는 false positive가 낮다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top">
+            <span class="priority p1">P1</span>
+            <span class="req-id">REQ-SEN-005</span>
+          </div>
+          <h3>ADC calibration 데이터를 재부팅 이후에도 설명 가능하게 만든다</h3>
+          <p><span class="strong">현재 구현:</span> calibration은 `min_raw/max_raw`를 메모리에만 두고 `HAL_Delay(3000U)` 기반으로 측정한다.</p>
+          <p><span class="strong">왜 부족한가:</span> calibration version과 무결성이 없어 재부팅 후 기준이 흔들리고, bench 결과를 재현하기 어렵다.</p>
+          <p><span class="strong">개선 방향:</span> calibration format에 version, range, checksum 또는 동등한 무결성 정보를 두고, 복원 정책과 invalid fallback을 정의한다. sampling은 가능한 한 non-blocking path로 바꾼다.</p>
+          <p><span class="strong">완료 기준:</span> calibration 적용 전후 차이를 설명할 수 있고, 재부팅 후에도 같은 기준으로 angle이 복원된다.</p>
+        </article>
+
+        <article class="req-card">
+          <div class="req-top">
+            <span class="priority p2">P2</span>
+            <span class="req-id">REQ-SEN-006</span>
+          </div>
+          <h3>장시간 검증 데이터셋과 triage 가이드를 남긴다</h3>
+          <p><span class="strong">현재 구현:</span> CSV와 `[ENCDBG]`는 있으나 센서 관점의 장시간 데이터셋 이름과 판정 규칙이 정해져 있지 않다.</p>
+          <p><span class="strong">왜 부족한가:</span> "괜찮아 보인다" 수준에서 멈추면 다른 파트가 센서 품질을 믿고 의사결정하기 어렵다.</p>
+          <p><span class="strong">개선 방향:</span> `encoder_longrun`, `adc_noise`, `sensor_crosscheck` 같은 데이터셋 규격과 실패 시 triage 순서를 문서화한다.</p>
+          <p><span class="strong">완료 기준:</span> 각 데이터셋에 조건, 샘플 수, 결과 요약, 이상 사례 해석이 붙는다.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Evidence</p>
+      <h2>이 파트의 완료 증거로 받아야 하는 것</h2>
+      <div class="evidence-grid">
+        <article class="evidence-card">
+          <h3>로그</h3>
+          <ul>
+            <li>`ENCDBG` sign 확인 로그</li>
+            <li>stale / mismatch / jump fault 예시 로그</li>
+            <li>normal run과 fault injection 비교 로그</li>
+          </ul>
+        </article>
+        <article class="evidence-card">
+          <h3>데이터셋</h3>
+          <ul>
+            <li>`Doc/measurements/encoder_longrun_*.csv`</li>
+            <li>`Doc/measurements/adc_noise_*.csv`</li>
+            <li>`Doc/measurements/sensor_crosscheck_*.csv`</li>
+          </ul>
+        </article>
+        <article class="evidence-card">
+          <h3>문서</h3>
+          <ul>
+            <li>sign mapping 표</li>
+            <li>freshness / validity bit 의미표</li>
+            <li>cross-check threshold 표</li>
+          </ul>
+        </article>
+      </div>
+      <div class="note">
+        센서 담당의 이번 단계 목표는 "새 센서를 더 읽는 것"이 아니라
+        <span class="strong">다른 파트가 믿고 gate를 걸 수 있는 센서 계약을 완성하는 것</span>이다.
+      </div>
+    </section>
+
+    <div class="footer">
+      Last updated: 2026-03-30<br>
+      Source baseline: `encoder_reader.c`, `adc_potentiometer.c`, `homing.c`, `app_runtime.c`
+    </div>
+  </main>
+</body>
+</html>

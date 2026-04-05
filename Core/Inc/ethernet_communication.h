@@ -1,18 +1,10 @@
 #ifndef INC_ETHERNET_COMMUNICATION_H_
 #define INC_ETHERNET_COMMUNICATION_H_
 
+#include "project_params.h"
+
 #include <stdint.h>
 #include <stdbool.h>
-
-/* UDP 포트 번호 (레거시 송신기 규격: 5000) */
-#define AUTODRIVE_UDP_PORT    5000
-#define ETHCOMM_RX_TIMEOUT_MS 300U
-
-/* 로그 정책:
- * 0: quiet(권장), 1: info/error 로그 출력 */
-#ifndef ETHCOMM_LOG_ENABLE
-#define ETHCOMM_LOG_ENABLE 0
-#endif
 
 /* 내부 정규화 데이터:
  * - ASMS 5B(mode + joystick), PC 9B(<iIB>)를 파싱해 공통 포맷으로 저장 */

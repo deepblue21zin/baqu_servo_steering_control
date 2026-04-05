@@ -11,6 +11,7 @@
 #include "encoder_reader.h"
 #include "ethernet_communication.h"
 #include "latency_profiler.h"
+#include "project_params.h"
 #include "position_control.h"
 #include "position_control_diag.h"
 #include "pulse_control.h"
@@ -19,17 +20,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#define APP_RUNTIME_AUTO_FIXED_PULSE_TEST        0
-#define APP_RUNTIME_AUTO_FIXED_PULSE_HZ          500000
-#define APP_RUNTIME_KEYBOARD_TEST_MODE           1
-#define APP_RUNTIME_KEYBOARD_STEP_DEG            1.0f
-#define APP_RUNTIME_ENCODER_DIAG_ENABLE          1
-#define APP_RUNTIME_ENCODER_DIAG_PERIOD_MS       100U
-#define APP_RUNTIME_VIRTUAL_ENCODER_LOG_ENABLE   0
-#define APP_RUNTIME_PERIODIC_CSV_LOG_ENABLE      1
-#define APP_RUNTIME_PERIODIC_CSV_LOG_PERIOD_MS   100U
-#define APP_RUNTIME_PERIODIC_DIAG_DIVIDER        100U
 
 extern volatile uint8_t interrupt_flag;
 
@@ -668,7 +658,9 @@ void AppRuntime_Init(void)
     printf("[VENC] Putty ENC/RAW uses pulse-integrated virtual encoder display.\r\n");
 #endif
 
+#if APP_RUNTIME_RESET_ENCODER_ON_BOOT
     EncoderReader_Reset();
+#endif
     AppRuntime_ResetVirtualEncoder();
     PositionControl_SetTargetWithSource(AppRuntime_TargetSteeringDegToMotorDeg(0.0f), CMD_SRC_LOCALTEST);
 #if APP_RUNTIME_KEYBOARD_TEST_MODE
@@ -681,7 +673,9 @@ void AppRuntime_Init(void)
 #if APP_RUNTIME_PERIODIC_CSV_LOG_ENABLE
     g_periodic_csv_enabled = 1U;
 #endif
+#if APP_RUNTIME_AUTO_START_CONTROL_ENABLE
     PositionControl_Enable();
+#endif
 
 #if APP_RUNTIME_KEYBOARD_TEST_MODE
     AppRuntime_KeyboardPrintHelp();
