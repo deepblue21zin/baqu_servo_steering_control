@@ -56,6 +56,41 @@
 #define PULSECONTROL_MAX_FREQ_HZ        100000U           /* firmware-side pulse clamp for TIM1 generation */
 #define PULSECONTROL_DIRECTION_GUARD_MS      1U           /* stop-to-reverse guard time before direction flip */
 
+/* ========== Sensor Contract / Diagnostics ==========
+ * Primary use: Core/Src/encoder_reader.c, Core/Src/adc_potentiometer.c,
+ *              Core/Src/homing.c, Core/Src/app_runtime.c
+ */
+#define SENSOR_POSITIVE_STEERING_IS_CW                 1  /* +steering_deg corresponds to physical CW steering rotation */
+#define SENSOR_POSITIVE_MOTOR_IS_CW                    1  /* +motor_deg corresponds to physical CW motor rotation */
+#define ENCODER_COUNT_POLARITY                         1  /* +1: encoder count increase means +motor_deg, -1 flips sensor polarity */
+#define ADC_POT_STEERING_POLARITY                      1  /* +1: increasing raw moves toward +steering_deg, -1 flips sensor polarity */
+#define SENSOR_DIR_PIN_ONE_IS_CW        DIR_ACTIVE_HIGH_FOR_CW /* DIR GPIO level 1 physical direction contract */
+
+#define ENCODER_SAMPLE_STALE_WARN_MS                20U  /* warning when encoder cache is older than this */
+#define ENCODER_SAMPLE_STALE_FAULT_MS               50U  /* fault when encoder cache is older than this */
+#define ADC_POT_SAMPLE_STALE_WARN_MS                20U  /* warning when ADC cache is older than this */
+#define ADC_POT_SAMPLE_STALE_FAULT_MS               50U  /* fault when ADC cache is older than this */
+#define ADC_POT_CONVERSION_TIMEOUT_MS               20U  /* timeout for non-blocking ADC conversion completion */
+
+#define ENCODER_VELOCITY_WARN_STEERING_DPS          60.0f    /* steering-axis plausibility warning threshold */
+#define ENCODER_VELOCITY_FAULT_STEERING_DPS        120.0f    /* steering-axis plausibility fault threshold */
+#define ENCODER_ACCEL_WARN_STEERING_DPS2         50000.0f    /* steering-axis acceleration warning threshold */
+#define ENCODER_ACCEL_FAULT_STEERING_DPS2       150000.0f    /* steering-axis acceleration fault threshold */
+
+#define SENSOR_CROSSCHECK_WARN_STEERING_DEG         2.0f     /* runtime encoder-vs-ADC warning threshold */
+#define SENSOR_CROSSCHECK_FAULT_STEERING_DEG        5.0f     /* runtime encoder-vs-ADC fault threshold */
+#define SENSOR_HOMING_CROSSCHECK_FAULT_DEG          2.0f     /* homing acceptance threshold after encoder offset is applied */
+#define SENSOR_CROSSCHECK_WARN_PERSIST_MS          20U       /* persistence window before runtime warning log */
+#define SENSOR_CROSSCHECK_FAULT_PERSIST_MS         50U       /* persistence window before runtime fault trip */
+
+#define SENSOR_DIRECTION_MIN_APPLIED_HZ          5000U       /* ignore direction plausibility below this command magnitude */
+#define SENSOR_DIRECTION_MIN_STEERING_DELTA_DEG   0.0003f    /* about half an encoder-count on steering axis */
+#define SENSOR_DIRECTION_WARN_PERSIST_MS           20U       /* mismatch persistence window before warning */
+#define SENSOR_DIRECTION_FAULT_PERSIST_MS          75U       /* mismatch persistence window before fault */
+
+#define ADC_POT_CALIBRATION_VERSION                 1U       /* persisted calibration format version */
+#define ADC_POT_CALIBRATION_STORAGE_ENABLED         1        /* backup-SRAM persistence switch */
+
 /* ========== Ethernet / UDP Integration ==========
  * Primary use: Core/Inc/ethernet_communication.h, Core/Src/ethernet_communication.c, Core/Src/app_runtime.c
  */
@@ -71,5 +106,11 @@
 #define LATENCY_MAX_SAMPLES               2048U           /* retained samples per stage before saturation */
 #define LATENCY_AUTO_REPORT_ENABLE           1            /* automatic batch report emission enable */
 #define LATENCY_AUTO_REPORT_SAMPLES       2000U           /* samples required before each auto-report batch */
+
+/* ========== Runtime Sensor Supervision ==========
+ * Primary use: Core/Src/app_runtime.c
+ */
+#define APP_RUNTIME_AUTO_HOME_ON_BOOT          1          /* perform ADC-backed homing before enabling control */
+#define APP_RUNTIME_SENSOR_DIAG_ENABLE         1          /* enable runtime sensor supervision and logs */
 
 #endif /* PROJECT_PARAMS_H */
