@@ -8,6 +8,7 @@
 #include "usart.h"
 
 #include "adc_potentiometer.h"
+#include "can_encoder_bridge.h"
 #include "constants.h"
 #include "encoder_reader.h"
 #include "ethernet_communication.h"
@@ -1055,6 +1056,7 @@ void AppRuntime_Init(void)
     ADC_Pot_Init(NULL);
     Homing_Init();
     PositionControl_Init();
+    (void)CanEncoderBridge_Init();
 
     Relay_ServoOn();
     HAL_Delay(500);
@@ -1113,6 +1115,8 @@ void AppRuntime_Init(void)
 /* Run one application super-loop iteration on top of the CubeMX main loop. */
 void AppRuntime_RunIteration(void)
 {
+    CanEncoderBridge_Service();
+
 #if APP_RUNTIME_KEYBOARD_TEST_MODE
     LAT_BEGIN(LAT_STAGE_COMMS);
     AppRuntime_KeyboardProcessInput();

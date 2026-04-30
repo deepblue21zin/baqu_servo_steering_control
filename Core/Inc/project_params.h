@@ -28,6 +28,15 @@
 #define APP_RUNTIME_AUTO_START_CONTROL_ENABLE    1        /* auto-enable closed-loop control after module initialization */
 #define APP_RUNTIME_RESET_ENCODER_ON_BOOT        1        /* zero the logical encoder origin during boot to match current firmware baseline */
 
+/* ========== CAN Encoder Bridge ==========
+ * Primary use: Core/Src/can_encoder_bridge.c, Core/Src/usart.c
+ */
+#define CAN_ENCODER_BRIDGE_ENABLE                1        /* USART1 4-byte encoder stream -> CAN1 frame bridge */
+#define CAN_ENCODER_UART_BAUDRATE            38400U       /* must match the servo drive RS422 encoder-port setting */
+#define CAN_ENCODER_BRIDGE_STD_ID            0x100U       /* CAN standard ID used for encoder frames */
+#define CAN_ENCODER_BRIDGE_MAX_BYTES_PER_SERVICE 16U      /* bounded non-blocking UART drain per super-loop pass */
+#define CAN_ENCODER_BRIDGE_LOG_ENABLE            1        /* boot log for bridge readiness */
+
 /* ========== Position Control ==========
  * Primary use: Core/Inc/position_control.h, Core/Src/position_control.c
  */
