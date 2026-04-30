@@ -48,6 +48,7 @@
 #define RS422_ENCODER_PRINT_FIRST_FRAMES        16U       /* first frames printed with HEX for bring-up */
 #define RS422_ENCODER_PRINT_PERIOD_MS          100U       /* after first frames, print latest decoded value at this period */
 #define RS422_ENCODER_IDLE_DUMP_MS              50U       /* dump partial HEX line when bytes stop arriving */
+#define RS422_ENCODER_STATUS_LOG_PERIOD_MS    1000U       /* print bytes/frames counters while bringing up wiring */
 
 /* ========== Position Control ==========
  * Primary use: Core/Inc/position_control.h, Core/Src/position_control.c

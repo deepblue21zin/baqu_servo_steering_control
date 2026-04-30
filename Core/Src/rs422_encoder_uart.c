@@ -22,6 +22,7 @@ typedef struct {
     uint32_t last_byte_tick_ms;
     uint32_t last_frame_tick_ms;
     uint32_t last_print_tick_ms;
+    uint32_t last_status_print_tick_ms;
     int32_t last_count;
     float last_motor_deg;
     float last_steering_deg;
@@ -32,6 +33,7 @@ static Rs422Encoder_Context_t g_rs422_encoder;
 static void Rs422Encoder_ProcessByte(uint8_t byte);
 static void Rs422Encoder_ProcessFrame(void);
 static void Rs422Encoder_DumpPartialIfIdle(uint32_t now_ms);
+static void Rs422Encoder_PrintStatusIfDue(uint32_t now_ms);
 
 int Rs422Encoder_Init(void)
 {
@@ -78,6 +80,7 @@ void Rs422Encoder_Service(void)
     }
 
     Rs422Encoder_DumpPartialIfIdle(HAL_GetTick());
+    Rs422Encoder_PrintStatusIfDue(HAL_GetTick());
 #endif
 }
 
@@ -185,4 +188,21 @@ static void Rs422Encoder_DumpPartialIfIdle(uint32_t now_ms)
 
     g_rs422_encoder.partial_dumps++;
     g_rs422_encoder.rx_len = 0U;
+}
+
+static void Rs422Encoder_PrintStatusIfDue(uint32_t now_ms)
+{
+    if ((now_ms - g_rs422_encoder.last_status_print_tick_ms) < RS422_ENCODER_STATUS_LOG_PERIOD_MS) {
+        return;
+    }
+
+    g_rs422_encoder.last_status_print_tick_ms = now_ms;
+    printf("[RS422][STAT] bytes=%lu frames=%lu rx_len=%u uart_errors=%lu partial=%lu last_count=%ld current_deg=%.3f\r\n",
+           (unsigned long)g_rs422_encoder.bytes,
+           (unsigned long)g_rs422_encoder.frames,
+           (unsigned int)g_rs422_encoder.rx_len,
+           (unsigned long)g_rs422_encoder.uart_errors,
+           (unsigned long)g_rs422_encoder.partial_dumps,
+           (long)g_rs422_encoder.last_count,
+           g_rs422_encoder.last_steering_deg);
 }
