@@ -19,6 +19,7 @@
 #include "position_control_diag.h"
 #include "pulse_control.h"
 #include "relay_control.h"
+#include "rs422_encoder_uart.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -1057,6 +1058,7 @@ void AppRuntime_Init(void)
     Homing_Init();
     PositionControl_Init();
     (void)CanEncoderBridge_Init();
+    (void)Rs422Encoder_Init();
 
     Relay_ServoOn();
     HAL_Delay(500);
@@ -1116,6 +1118,7 @@ void AppRuntime_Init(void)
 void AppRuntime_RunIteration(void)
 {
     CanEncoderBridge_Service();
+    Rs422Encoder_Service();
 
 #if APP_RUNTIME_KEYBOARD_TEST_MODE
     LAT_BEGIN(LAT_STAGE_COMMS);

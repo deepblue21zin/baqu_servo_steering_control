@@ -37,6 +37,18 @@
 #define CAN_ENCODER_BRIDGE_MAX_BYTES_PER_SERVICE 16U      /* bounded non-blocking UART drain per super-loop pass */
 #define CAN_ENCODER_BRIDGE_LOG_ENABLE            1        /* boot log for bridge readiness */
 
+/* ========== RS422 Servo Encoder Reader ==========
+ * Primary use: Core/Src/rs422_encoder_uart.c, Core/Src/usart.c
+ */
+#define RS422_ENCODER_READER_ENABLE              1        /* USART2 PA3 RX -> Putty hex/count/degree diagnostic */
+#define RS422_ENCODER_UART_BAUDRATE          38400U       /* must match the servo CN4 RS422 setting */
+#define RS422_ENCODER_FRAME_SIZE                 4U       /* default: 4-byte little-endian signed encoder count */
+#define RS422_ENCODER_MAX_BYTES_PER_SERVICE     32U       /* bounded non-blocking UART drain per super-loop pass */
+#define RS422_ENCODER_PRINT_EACH_FRAME           0        /* 1: print every decoded frame; use briefly only */
+#define RS422_ENCODER_PRINT_FIRST_FRAMES        16U       /* first frames printed with HEX for bring-up */
+#define RS422_ENCODER_PRINT_PERIOD_MS          100U       /* after first frames, print latest decoded value at this period */
+#define RS422_ENCODER_IDLE_DUMP_MS              50U       /* dump partial HEX line when bytes stop arriving */
+
 /* ========== Position Control ==========
  * Primary use: Core/Inc/position_control.h, Core/Src/position_control.c
  */
