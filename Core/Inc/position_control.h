@@ -114,6 +114,7 @@ typedef void (*PosCtrl_StableCallback_t)(void);
 
 int PositionControl_Init(void);
 void PositionControl_Update(void);
+void PositionControl_UpdateWithCurrentAngle(float current_angle);
 
 int PositionControl_SetTarget(float target_deg);
 int PositionControl_SetTargetWithSource(float target_deg, CommandSource_t source);

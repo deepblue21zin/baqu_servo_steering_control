@@ -382,7 +382,7 @@ int PositionControl_Init(void)
     return POS_CTRL_OK;
 }
 
-void PositionControl_Update(void)
+void PositionControl_UpdateWithCurrentAngle(float current_angle)
 {
     bool was_stable = state.is_stable;
     uint32_t current_time = 0U;
@@ -392,7 +392,7 @@ void PositionControl_Update(void)
     DBG_LOOP_SET();
 
     if (!control_enabled) {
-        state.current_angle = EncoderReader_GetAngleDeg();
+        state.current_angle = current_angle;
         state.error = state.target_angle - state.current_angle;
         state.output = 0.0f;
         measured_velocity_deg_per_s = 0.0f;
@@ -404,7 +404,7 @@ void PositionControl_Update(void)
     }
 
     LAT_BEGIN(LAT_STAGE_SENSE);
-    state.current_angle = EncoderReader_GetAngleDeg();
+    state.current_angle = current_angle;
     current_time = HAL_GetTick();
     dt = (current_time - pid_state.last_time_ms) / 1000.0f;
     if (dt <= 0.0f) {
@@ -493,6 +493,11 @@ void PositionControl_Update(void)
 
     PositionControl_SyncDiagState();
     DBG_LOOP_RESET();
+}
+
+void PositionControl_Update(void)
+{
+    PositionControl_UpdateWithCurrentAngle(EncoderReader_GetAngleDeg());
 }
 
 int PositionControl_SetTarget(float target_deg)
