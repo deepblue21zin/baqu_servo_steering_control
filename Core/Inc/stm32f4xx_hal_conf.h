@@ -39,9 +39,7 @@
 
   /* #define HAL_CRYP_MODULE_ENABLED */
 #define HAL_ADC_MODULE_ENABLED
-/* #define HAL_CAN_MODULE_ENABLED */
 /* #define HAL_CRC_MODULE_ENABLED */
-/* #define HAL_CAN_LEGACY_MODULE_ENABLED */
 /* #define HAL_DAC_MODULE_ENABLED */
 /* #define HAL_DCMI_MODULE_ENABLED */
 /* #define HAL_DMA2D_MODULE_ENABLED */
@@ -155,7 +153,6 @@
 #define  DATA_CACHE_ENABLE            1U
 
 #define  USE_HAL_ADC_REGISTER_CALLBACKS         0U /* ADC register callback disabled       */
-#define  USE_HAL_CAN_REGISTER_CALLBACKS         0U /* CAN register callback disabled       */
 #define  USE_HAL_CEC_REGISTER_CALLBACKS         0U /* CEC register callback disabled       */
 #define  USE_HAL_CRYP_REGISTER_CALLBACKS        0U /* CRYP register callback disabled      */
 #define  USE_HAL_DAC_REGISTER_CALLBACKS         0U /* DAC register callback disabled       */
@@ -297,14 +294,6 @@
 #ifdef HAL_ADC_MODULE_ENABLED
   #include "stm32f4xx_hal_adc.h"
 #endif /* HAL_ADC_MODULE_ENABLED */
-
-#ifdef HAL_CAN_MODULE_ENABLED
-  #include "stm32f4xx_hal_can.h"
-#endif /* HAL_CAN_MODULE_ENABLED */
-
-#ifdef HAL_CAN_LEGACY_MODULE_ENABLED
-  #include "stm32f4xx_hal_can_legacy.h"
-#endif /* HAL_CAN_LEGACY_MODULE_ENABLED */
 
 #ifdef HAL_CRC_MODULE_ENABLED
   #include "stm32f4xx_hal_crc.h"
