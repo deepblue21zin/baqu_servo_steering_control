@@ -8,7 +8,6 @@
 #include "usart.h"
 
 #include "adc_potentiometer.h"
-#include "can_encoder_bridge.h"
 #include "constants.h"
 #include "encoder_reader.h"
 #include "ethernet_communication.h"
@@ -51,6 +50,9 @@ static uint8_t g_periodic_csv_enabled = 1U;
 #define APP_SENSOR_WARN_ADC_JUMP             (1UL << 5)
 #define APP_SENSOR_WARN_ADC_STUCK            (1UL << 6)
 #define APP_SENSOR_WARN_DIR_MISMATCH         (1UL << 7)
+#define APP_SENSOR_WARN_RS422_STALE          (1UL << 8)
+#define APP_SENSOR_WARN_RS422_CROSSCHECK     (1UL << 9)
+#define APP_SENSOR_WARN_RS422_ZERO_REQUIRED  (1UL << 10)
 
 #define APP_SENSOR_FAULT_ENCODER_STALE       (1UL << 16)
 #define APP_SENSOR_FAULT_ADC_STALE           (1UL << 17)
@@ -59,16 +61,24 @@ static uint8_t g_periodic_csv_enabled = 1U;
 #define APP_SENSOR_FAULT_VELOCITY            (1UL << 20)
 #define APP_SENSOR_FAULT_ACCEL               (1UL << 21)
 #define APP_SENSOR_FAULT_DIR_MISMATCH        (1UL << 22)
+#define APP_SENSOR_FAULT_RS422_STALE         (1UL << 23)
+#define APP_SENSOR_FAULT_RS422_CROSSCHECK    (1UL << 24)
 
 typedef struct {
     EncoderSample_t encoder;
     ADC_PotSample_t adc;
     ADC_PotCalibration_t adc_calibration;
+    Rs422Encoder_Status_t rs422;
     float crosscheck_error_deg;
+    float rs422_tim2_error_deg;
     uint32_t warn_flags;
     uint32_t fault_flags;
     uint32_t crosscheck_condition_start_ms;
+    uint32_t rs422_crosscheck_condition_start_ms;
     uint32_t direction_condition_start_ms;
+    uint32_t rs422_age_ms;
+    uint8_t encoder_sample_valid;
+    uint8_t rs422_sample_valid;
     const char *last_reason;
 } AppRuntime_SensorDiag_t;
 
@@ -138,12 +148,20 @@ static uint32_t AppRuntime_GetDisplayEncoderRaw(void)
 #define AppRuntime_UpdateVirtualEncoder() ((void)0)
 static int32_t AppRuntime_GetDisplayEncoderCount(void)
 {
+#if APP_RUNTIME_SENSOR_DIAG_ENABLE
+    return (int32_t)g_sensor_diag.encoder.accum_count;
+#else
     return EncoderReader_GetCount();
+#endif
 }
 
 static uint32_t AppRuntime_GetDisplayEncoderRaw(void)
 {
+#if APP_RUNTIME_SENSOR_DIAG_ENABLE
+    return (uint32_t)g_sensor_diag.encoder.raw_count;
+#else
     return EncoderReader_GetRawCounter();
+#endif
 }
 #endif
 
@@ -183,6 +201,12 @@ static const char* AppRuntime_SensorReasonString(uint32_t warn_flags, uint32_t f
     if ((fault_flags & APP_SENSOR_FAULT_DIR_MISMATCH) != 0U) {
         return "direction_mismatch";
     }
+    if ((fault_flags & APP_SENSOR_FAULT_RS422_STALE) != 0U) {
+        return "rs422_stale";
+    }
+    if ((fault_flags & APP_SENSOR_FAULT_RS422_CROSSCHECK) != 0U) {
+        return "rs422_tim2_crosscheck";
+    }
 
     if ((warn_flags & APP_SENSOR_WARN_ENCODER_STALE) != 0U) {
         return "encoder_stale_warn";
@@ -208,6 +232,15 @@ static const char* AppRuntime_SensorReasonString(uint32_t warn_flags, uint32_t f
     if ((warn_flags & APP_SENSOR_WARN_DIR_MISMATCH) != 0U) {
         return "direction_mismatch_warn";
     }
+    if ((warn_flags & APP_SENSOR_WARN_RS422_STALE) != 0U) {
+        return "rs422_stale_warn";
+    }
+    if ((warn_flags & APP_SENSOR_WARN_RS422_CROSSCHECK) != 0U) {
+        return "rs422_tim2_crosscheck_warn";
+    }
+    if ((warn_flags & APP_SENSOR_WARN_RS422_ZERO_REQUIRED) != 0U) {
+        return "rs422_zero_required";
+    }
 
     return "none";
 }
@@ -216,24 +249,36 @@ static void AppRuntime_ResetSensorDiag(void)
 {
     memset(&g_sensor_diag, 0, sizeof(g_sensor_diag));
     g_sensor_diag.last_reason = "none";
+#if APP_RUNTIME_ADC_POT_ENABLE
     (void)ADC_Pot_GetCalibration(&g_sensor_diag.adc_calibration);
+#else
+    g_sensor_diag.adc.validity = ADC_POT_VALID;
+#endif
 }
 
 static void AppRuntime_PrintSensorContract(void)
 {
+#if APP_RUNTIME_ADC_POT_ENABLE
     printf("[SENCFG] +steering=%s +motor=%s +encoder_count=%s DIR_PIN_1=%s adc_raw_inc=%s\r\n",
            (SENSOR_POSITIVE_STEERING_IS_CW != 0) ? "CW" : "CCW",
            (SENSOR_POSITIVE_MOTOR_IS_CW != 0) ? "CW" : "CCW",
            (ENCODER_COUNT_POLARITY >= 0) ? "CW" : "CCW",
            (SENSOR_DIR_PIN_ONE_IS_CW != 0) ? "CW" : "CCW",
            (ADC_POT_STEERING_POLARITY >= 0) ? "+steering" : "-steering");
+#else
+    printf("[SENCFG] +steering=%s +motor=%s +encoder_count=%s DIR_PIN_1=%s adc_pot=disabled\r\n",
+           (SENSOR_POSITIVE_STEERING_IS_CW != 0) ? "CW" : "CCW",
+           (SENSOR_POSITIVE_MOTOR_IS_CW != 0) ? "CW" : "CCW",
+           (ENCODER_COUNT_POLARITY >= 0) ? "CW" : "CCW",
+           (SENSOR_DIR_PIN_ONE_IS_CW != 0) ? "CW" : "CCW");
+#endif
 }
 
 static void AppRuntime_LogSensorState(const char *level,
                                       uint32_t warn_flags,
                                       uint32_t fault_flags)
 {
-    printf("[SENSOR][%s] reason=%s warn=0x%08lX fault=0x%08lX enc=%.3f adc=%.3f xerr=%.3f enc_age=%lu adc_age=%lu enc_valid=0x%02lX adc_valid=0x%02lX calib_v=%lu calib_crc=0x%08lX\r\n",
+    printf("[SENSOR][%s] reason=%s warn=0x%08lX fault=0x%08lX enc=%.3f adc=%.3f xerr=%.3f rs422=%.3f rerr=%.3f rs422_age=%lu rs422_valid=%u enc_age=%lu adc_age=%lu enc_valid=0x%02lX adc_valid=0x%02lX calib_v=%lu calib_crc=0x%08lX\r\n",
            level,
            g_sensor_diag.last_reason,
            (unsigned long)warn_flags,
@@ -241,6 +286,10 @@ static void AppRuntime_LogSensorState(const char *level,
            g_sensor_diag.encoder.steering_deg,
            g_sensor_diag.adc.calibrated_angle_deg,
            g_sensor_diag.crosscheck_error_deg,
+           g_sensor_diag.rs422.last_steering_deg,
+           g_sensor_diag.rs422_tim2_error_deg,
+           (unsigned long)g_sensor_diag.rs422_age_ms,
+           (unsigned int)g_sensor_diag.rs422_sample_valid,
            (unsigned long)g_sensor_diag.encoder.age_ms,
            (unsigned long)g_sensor_diag.adc.age_ms,
            (unsigned long)g_sensor_diag.encoder.validity,
@@ -251,12 +300,14 @@ static void AppRuntime_LogSensorState(const char *level,
 
 static uint8_t AppRuntime_SensorsReadyForControl(void)
 {
-    if ((APP_RUNTIME_AUTO_HOME_ON_BOOT != 0) && (Homing_IsComplete() == 0U)) {
+    if ((APP_RUNTIME_ADC_POT_ENABLE != 0) &&
+        (APP_RUNTIME_AUTO_HOME_ON_BOOT != 0) &&
+        (Homing_IsComplete() == 0U)) {
         g_sensor_diag.last_reason = Homing_GetLastFailureReason();
         return 0U;
     }
 
-    if (g_sensor_diag.fault_flags != 0U) {
+    if ((APP_RUNTIME_EMERGENCY_LATCH_ENABLE != 0) && (g_sensor_diag.fault_flags != 0U)) {
         return 0U;
     }
 
@@ -265,12 +316,14 @@ static uint8_t AppRuntime_SensorsReadyForControl(void)
         return 0U;
     }
 
-    if ((g_sensor_diag.adc.validity & (ADC_POT_INVALID_NOT_INIT |
-                                       ADC_POT_INVALID_DISCONNECT |
-                                       ADC_POT_INVALID_TIMEOUT |
-                                       ADC_POT_INVALID_RANGE)) != 0U) {
-        g_sensor_diag.last_reason = "adc_not_ready";
-        return 0U;
+    if (APP_RUNTIME_ADC_POT_ENABLE != 0) {
+        if ((g_sensor_diag.adc.validity & (ADC_POT_INVALID_NOT_INIT |
+                                           ADC_POT_INVALID_DISCONNECT |
+                                           ADC_POT_INVALID_TIMEOUT |
+                                           ADC_POT_INVALID_RANGE)) != 0U) {
+            g_sensor_diag.last_reason = "adc_not_ready";
+            return 0U;
+        }
     }
 
     return 1U;
@@ -301,15 +354,36 @@ static void AppRuntime_ServiceSensorSupervisor(void)
     uint32_t fault_flags = 0U;
     float delta_steer_deg = 0.0f;
     float abs_crosscheck_error_deg = 0.0f;
+    float abs_rs422_tim2_error_deg = 0.0f;
     uint8_t encoder_ok = 0U;
     uint8_t adc_ok = 0U;
 
     EncoderReader_Service();
+#if APP_RUNTIME_ADC_POT_ENABLE
     ADC_Pot_Service();
+#endif
 
     encoder_ok = EncoderReader_GetSample(&g_sensor_diag.encoder);
+    g_sensor_diag.encoder_sample_valid = encoder_ok;
+#if RS422_ENCODER_READER_ENABLE
+    g_sensor_diag.rs422_sample_valid = Rs422Encoder_GetLatest(&g_sensor_diag.rs422);
+    if (g_sensor_diag.rs422_sample_valid != 0U) {
+        g_sensor_diag.rs422_age_ms = now_ms - g_sensor_diag.rs422.last_frame_tick_ms;
+    } else {
+        g_sensor_diag.rs422_age_ms = 0xFFFFFFFFUL;
+    }
+#else
+    memset(&g_sensor_diag.rs422, 0, sizeof(g_sensor_diag.rs422));
+    g_sensor_diag.rs422_sample_valid = 0U;
+    g_sensor_diag.rs422_age_ms = 0xFFFFFFFFUL;
+#endif
+#if APP_RUNTIME_ADC_POT_ENABLE
     adc_ok = ADC_Pot_GetSample(&g_sensor_diag.adc);
     (void)ADC_Pot_GetCalibration(&g_sensor_diag.adc_calibration);
+#else
+    g_sensor_diag.adc.validity = ADC_POT_VALID;
+    g_sensor_diag.adc.age_ms = 0U;
+#endif
 
     if ((encoder_ok == 0U) || ((g_sensor_diag.encoder.validity & ENCODER_INVALID_NOT_INIT) != 0U)) {
         fault_flags |= APP_SENSOR_FAULT_ENCODER_STALE;
@@ -333,28 +407,31 @@ static void AppRuntime_ServiceSensorSupervisor(void)
         fault_flags |= APP_SENSOR_FAULT_ACCEL;
     }
 
-    if ((adc_ok == 0U) || ((g_sensor_diag.adc.validity & ADC_POT_INVALID_NOT_INIT) != 0U)) {
-        fault_flags |= APP_SENSOR_FAULT_ADC_STALE;
-    }
-    if (g_sensor_diag.adc.age_ms >= ADC_POT_SAMPLE_STALE_WARN_MS) {
-        warn_flags |= APP_SENSOR_WARN_ADC_STALE;
-    }
-    if ((g_sensor_diag.adc.age_ms >= ADC_POT_SAMPLE_STALE_FAULT_MS) ||
-        ((g_sensor_diag.adc.validity & ADC_POT_INVALID_TIMEOUT) != 0U)) {
-        fault_flags |= APP_SENSOR_FAULT_ADC_STALE;
-    }
-    if ((g_sensor_diag.adc.validity & (ADC_POT_INVALID_DISCONNECT | ADC_POT_INVALID_RANGE)) != 0U) {
-        fault_flags |= APP_SENSOR_FAULT_ADC_INVALID;
-    }
-    if ((g_sensor_diag.adc.validity & ADC_POT_INVALID_JUMP) != 0U) {
-        warn_flags |= APP_SENSOR_WARN_ADC_JUMP;
-    }
-    if ((g_sensor_diag.adc.validity & ADC_POT_INVALID_STUCK) != 0U) {
-        warn_flags |= APP_SENSOR_WARN_ADC_STUCK;
+    if (APP_RUNTIME_ADC_POT_ENABLE != 0) {
+        if ((adc_ok == 0U) || ((g_sensor_diag.adc.validity & ADC_POT_INVALID_NOT_INIT) != 0U)) {
+            fault_flags |= APP_SENSOR_FAULT_ADC_STALE;
+        }
+        if (g_sensor_diag.adc.age_ms >= ADC_POT_SAMPLE_STALE_WARN_MS) {
+            warn_flags |= APP_SENSOR_WARN_ADC_STALE;
+        }
+        if ((g_sensor_diag.adc.age_ms >= ADC_POT_SAMPLE_STALE_FAULT_MS) ||
+            ((g_sensor_diag.adc.validity & ADC_POT_INVALID_TIMEOUT) != 0U)) {
+            fault_flags |= APP_SENSOR_FAULT_ADC_STALE;
+        }
+        if ((g_sensor_diag.adc.validity & (ADC_POT_INVALID_DISCONNECT | ADC_POT_INVALID_RANGE)) != 0U) {
+            fault_flags |= APP_SENSOR_FAULT_ADC_INVALID;
+        }
+        if ((g_sensor_diag.adc.validity & ADC_POT_INVALID_JUMP) != 0U) {
+            warn_flags |= APP_SENSOR_WARN_ADC_JUMP;
+        }
+        if ((g_sensor_diag.adc.validity & ADC_POT_INVALID_STUCK) != 0U) {
+            warn_flags |= APP_SENSOR_WARN_ADC_STUCK;
+        }
     }
 
     g_sensor_diag.crosscheck_error_deg = 0.0f;
-    if ((encoder_ok != 0U) && (adc_ok != 0U) &&
+    if ((APP_RUNTIME_ADC_POT_ENABLE != 0) &&
+        (encoder_ok != 0U) && (adc_ok != 0U) &&
         ((fault_flags & (APP_SENSOR_FAULT_ENCODER_STALE |
                          APP_SENSOR_FAULT_ADC_STALE |
                          APP_SENSOR_FAULT_ADC_INVALID)) == 0U)) {
@@ -380,7 +457,52 @@ static void AppRuntime_ServiceSensorSupervisor(void)
         g_sensor_diag.crosscheck_condition_start_ms = 0U;
     }
 
-    if ((pulse_status.output_active != 0U) &&
+    g_sensor_diag.rs422_tim2_error_deg = 0.0f;
+    if ((RS422_ENCODER_READER_ENABLE != 0) &&
+        (g_sensor_diag.rs422_sample_valid == 0U)) {
+        warn_flags |= APP_SENSOR_WARN_RS422_STALE;
+        g_sensor_diag.rs422_crosscheck_condition_start_ms = 0U;
+    } else if ((RS422_ENCODER_READER_ENABLE != 0) &&
+               (g_sensor_diag.rs422_age_ms >= RS422_ENCODER_SAMPLE_STALE_FAULT_MS)) {
+        fault_flags |= APP_SENSOR_FAULT_RS422_STALE;
+        g_sensor_diag.rs422_crosscheck_condition_start_ms = 0U;
+    } else if ((RS422_ENCODER_READER_ENABLE != 0) &&
+               (g_sensor_diag.rs422_age_ms >= RS422_ENCODER_SAMPLE_STALE_WARN_MS)) {
+        warn_flags |= APP_SENSOR_WARN_RS422_STALE;
+        g_sensor_diag.rs422_crosscheck_condition_start_ms = 0U;
+    } else if ((RS422_ENCODER_READER_ENABLE != 0) &&
+               (g_sensor_diag.rs422.zero_valid == 0U)) {
+        warn_flags |= APP_SENSOR_WARN_RS422_ZERO_REQUIRED;
+        g_sensor_diag.rs422_crosscheck_condition_start_ms = 0U;
+    } else if ((RS422_ENCODER_READER_ENABLE != 0) &&
+               (encoder_ok != 0U) &&
+               ((fault_flags & APP_SENSOR_FAULT_ENCODER_STALE) == 0U)) {
+        g_sensor_diag.rs422_tim2_error_deg =
+            g_sensor_diag.encoder.steering_deg - g_sensor_diag.rs422.last_steering_deg;
+        abs_rs422_tim2_error_deg = fabsf(g_sensor_diag.rs422_tim2_error_deg);
+
+        if (abs_rs422_tim2_error_deg >= RS422_TIM2_CROSSCHECK_WARN_STEERING_DEG) {
+            if (g_sensor_diag.rs422_crosscheck_condition_start_ms == 0U) {
+                g_sensor_diag.rs422_crosscheck_condition_start_ms = now_ms;
+            }
+            if ((now_ms - g_sensor_diag.rs422_crosscheck_condition_start_ms) >=
+                RS422_TIM2_CROSSCHECK_WARN_PERSIST_MS) {
+                warn_flags |= APP_SENSOR_WARN_RS422_CROSSCHECK;
+            }
+            if ((abs_rs422_tim2_error_deg >= RS422_TIM2_CROSSCHECK_FAULT_STEERING_DEG) &&
+                ((now_ms - g_sensor_diag.rs422_crosscheck_condition_start_ms) >=
+                 RS422_TIM2_CROSSCHECK_FAULT_PERSIST_MS)) {
+                fault_flags |= APP_SENSOR_FAULT_RS422_CROSSCHECK;
+            }
+        } else {
+            g_sensor_diag.rs422_crosscheck_condition_start_ms = 0U;
+        }
+    } else {
+        g_sensor_diag.rs422_crosscheck_condition_start_ms = 0U;
+    }
+
+    if ((SENSOR_DIRECTION_PLAUSIBILITY_ENABLE != 0) &&
+        (pulse_status.output_active != 0U) &&
         (pulse_status.applied_frequency_hz >= SENSOR_DIRECTION_MIN_APPLIED_HZ)) {
         int32_t expected_sign = (pulse_status.direction == DIR_CW) ? 1 : -1;
         int32_t actual_sign = 0;
@@ -392,7 +514,7 @@ static void AppRuntime_ServiceSensorSupervisor(void)
             actual_sign = -1;
         }
 
-        if (actual_sign != expected_sign) {
+        if ((actual_sign != 0) && (actual_sign != expected_sign)) {
             if (g_sensor_diag.direction_condition_start_ms == 0U) {
                 g_sensor_diag.direction_condition_start_ms = now_ms;
             }
@@ -423,7 +545,9 @@ static void AppRuntime_ServiceSensorSupervisor(void)
         }
     }
 
-    if ((fault_flags != 0U) && (prev_fault_flags == 0U)) {
+    if ((APP_RUNTIME_EMERGENCY_LATCH_ENABLE != 0) &&
+        (fault_flags != 0U) &&
+        (prev_fault_flags == 0U)) {
         PositionControl_EmergencyStop();
     }
 }
@@ -439,7 +563,7 @@ static void AppRuntime_ServiceSensorSupervisor(void)
 /* Print the CSV schema once so bench logs remain self-describing. */
 static void AppRuntime_PrintPeriodicCsvHeader(void)
 {
-    printf("CSV_HEADER,ms,mode,target_deg,current_deg,error_deg,output,dir,enc_cnt,enc_raw,enc_deg,adc_deg,xerr_deg,enc_age_ms,adc_age_ms,enc_valid,adc_valid,sen_warn,sen_fault,sen_reason,req_hz,applied_hz,out_active,rev_guard,cmd_id,cmd_state,cmd_result\r\n");
+    printf("CSV_HEADER,ms,mode,target_deg,current_deg,error_deg,output,dir,enc_cnt,enc_raw,enc_deg,rs422_deg,rs422_rel,rs422_age_ms,rs422_valid,rs422_xerr_deg,adc_deg,xerr_deg,enc_age_ms,adc_age_ms,enc_valid,adc_valid,sen_warn,sen_fault,sen_reason,req_hz,applied_hz,out_active,rev_guard,cmd_id,cmd_state,cmd_result\r\n");
 }
 
 /* Emit a throttled CSV telemetry row for offline log analysis. */
@@ -455,6 +579,11 @@ static void AppRuntime_ServicePeriodicCsv(void)
     uint32_t enc_raw = AppRuntime_GetDisplayEncoderRaw();
 #if APP_RUNTIME_SENSOR_DIAG_ENABLE
     float enc_steering_deg = g_sensor_diag.encoder.steering_deg;
+    float rs422_steering_deg = g_sensor_diag.rs422.last_steering_deg;
+    int32_t rs422_relative_count = g_sensor_diag.rs422.last_relative_count;
+    uint32_t rs422_age_ms = g_sensor_diag.rs422_age_ms;
+    uint8_t rs422_sample_valid = g_sensor_diag.rs422_sample_valid;
+    float rs422_tim2_error_deg = g_sensor_diag.rs422_tim2_error_deg;
     float adc_steering_deg = g_sensor_diag.adc.calibrated_angle_deg;
     float crosscheck_error_deg = g_sensor_diag.crosscheck_error_deg;
     uint32_t enc_age_ms = g_sensor_diag.encoder.age_ms;
@@ -466,6 +595,11 @@ static void AppRuntime_ServicePeriodicCsv(void)
     const char *sensor_reason = g_sensor_diag.last_reason;
 #else
     float enc_steering_deg = 0.0f;
+    float rs422_steering_deg = 0.0f;
+    int32_t rs422_relative_count = 0;
+    uint32_t rs422_age_ms = 0U;
+    uint8_t rs422_sample_valid = 0U;
+    float rs422_tim2_error_deg = 0.0f;
     float adc_steering_deg = 0.0f;
     float crosscheck_error_deg = 0.0f;
     uint32_t enc_age_ms = 0U;
@@ -486,7 +620,7 @@ static void AppRuntime_ServicePeriodicCsv(void)
     }
     last_ms = now_ms;
 
-    printf("CSV,%lu,%d,%.3f,%.3f,%.3f,%.0f,%d,%ld,%lu,%.3f,%.3f,%.3f,%lu,%lu,0x%02lX,0x%02lX,0x%08lX,0x%08lX,%s,%ld,%lu,%u,%u,%lu,%d,%d\r\n",
+    printf("CSV,%lu,%d,%.3f,%.3f,%.3f,%.0f,%d,%ld,%lu,%.3f,%.3f,%ld,%lu,%u,%.3f,%.3f,%.3f,%lu,%lu,0x%02lX,0x%02lX,0x%08lX,0x%08lX,%s,%ld,%lu,%u,%u,%lu,%d,%d\r\n",
            (unsigned long)now_ms,
            (int)PositionControl_GetMode(),
            AppRuntime_TargetMotorDegToSteeringDeg(s.target_angle),
@@ -497,6 +631,11 @@ static void AppRuntime_ServicePeriodicCsv(void)
            (long)enc_count,
            (unsigned long)enc_raw,
            enc_steering_deg,
+           rs422_steering_deg,
+           (long)rs422_relative_count,
+           (unsigned long)rs422_age_ms,
+           (unsigned int)rs422_sample_valid,
+           rs422_tim2_error_deg,
            adc_steering_deg,
            crosscheck_error_deg,
            (unsigned long)enc_age_ms,
@@ -612,7 +751,11 @@ static void AppRuntime_ServiceEncoderRuntimeDiag(void)
     cc2e = ((ccer & TIM_CCER_CC2E) != 0U) ? 1U : 0U;
     enc_a_state = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
     enc_b_state = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_3);
+#if APP_RUNTIME_SENSOR_DIAG_ENABLE
+    encoder_sample = g_sensor_diag.encoder;
+#else
     (void)EncoderReader_GetSample(&encoder_sample);
+#endif
 
     printf("[ENCDBG] ms=%lu cnt=%lu prev=%lu raw_delta=%ld signed_delta=%ld steer=%.3f motor=%.3f dir_pin=%d enc_valid=0x%02lX A=%d B=%d CEN=%lu SMS=%lu CC1S=%lu CC2S=%lu CC1E=%lu CC2E=%lu CR1=0x%04lX SMCR=0x%04lX CCMR1=0x%04lX CCER=0x%04lX\r\n",
            (unsigned long)now_ms,
@@ -671,6 +814,10 @@ static void AppRuntime_KeyboardPrintControlSnapshot(const char *reason)
     int32_t enc_count = AppRuntime_GetDisplayEncoderCount();
     uint32_t enc_raw = AppRuntime_GetDisplayEncoderRaw();
 #if APP_RUNTIME_SENSOR_DIAG_ENABLE
+    float rs422_steering_deg = g_sensor_diag.rs422.last_steering_deg;
+    float rs422_tim2_error_deg = g_sensor_diag.rs422_tim2_error_deg;
+    uint32_t rs422_age_ms = g_sensor_diag.rs422_age_ms;
+    uint8_t rs422_sample_valid = g_sensor_diag.rs422_sample_valid;
     float adc_steering_deg = g_sensor_diag.adc.calibrated_angle_deg;
     float crosscheck_error_deg = g_sensor_diag.crosscheck_error_deg;
     uint32_t encoder_validity = g_sensor_diag.encoder.validity;
@@ -679,6 +826,10 @@ static void AppRuntime_KeyboardPrintControlSnapshot(const char *reason)
     uint32_t sensor_fault_flags = g_sensor_diag.fault_flags;
     const char *sensor_reason = g_sensor_diag.last_reason;
 #else
+    float rs422_steering_deg = 0.0f;
+    float rs422_tim2_error_deg = 0.0f;
+    uint32_t rs422_age_ms = 0U;
+    uint8_t rs422_sample_valid = 0U;
     float adc_steering_deg = 0.0f;
     float crosscheck_error_deg = 0.0f;
     uint32_t encoder_validity = 0U;
@@ -688,7 +839,7 @@ static void AppRuntime_KeyboardPrintControlSnapshot(const char *reason)
     const char *sensor_reason = "none";
 #endif
 
-    printf("[KB][%s] T=%.2fdeg C=%.2fdeg E=%.2fdeg O=%.0f DIR=%d ENC=%ld RAW=%lu ADC=%.2f XERR=%.2f EV=0x%02lX AV=0x%02lX SW=0x%08lX SF=0x%08lX SR=%s REQ=%ld AP=%lu RUN=%u REV=%u CMD=%lu/%s/%s\r\n",
+    printf("[KB][%s] T=%.2fdeg C=%.2fdeg E=%.2fdeg O=%.0f DIR=%d ENC=%ld RAW=%lu RS422=%.2f RERR=%.2f RAGE=%lu RV=%u ADC=%.2f XERR=%.2f EV=0x%02lX AV=0x%02lX SW=0x%08lX SF=0x%08lX SR=%s REQ=%ld AP=%lu RUN=%u REV=%u CMD=%lu/%s/%s\r\n",
            reason,
            AppRuntime_TargetMotorDegToSteeringDeg(s.target_angle),
            AppRuntime_TargetMotorDegToSteeringDeg(s.current_angle),
@@ -697,6 +848,10 @@ static void AppRuntime_KeyboardPrintControlSnapshot(const char *reason)
            (int)dir_state,
            (long)enc_count,
            (unsigned long)enc_raw,
+           rs422_steering_deg,
+           rs422_tim2_error_deg,
+           (unsigned long)rs422_age_ms,
+           (unsigned int)rs422_sample_valid,
            adc_steering_deg,
            crosscheck_error_deg,
            (unsigned long)encoder_validity,
@@ -719,6 +874,12 @@ static void AppRuntime_KeyboardApplyTarget(void)
     float motor_target_deg = SteeringDegToMotorDeg(g_keyboard_target_steer_deg);
     int ret = PositionControl_SetTargetWithSource(motor_target_deg, CMD_SRC_KEYBOARD);
 
+#if APP_RUNTIME_KEYBOARD_AUTO_ENABLE_ON_TARGET
+    if (ret == POS_CTRL_OK) {
+        AppRuntime_RequestControlEnable("keyboard_target");
+    }
+#endif
+
     printf("[KB] target steer=%.1f deg motor=%.1f deg ret=%d\r\n",
            g_keyboard_target_steer_deg,
            motor_target_deg,
@@ -726,10 +887,40 @@ static void AppRuntime_KeyboardApplyTarget(void)
     AppRuntime_KeyboardPrintControlSnapshot("target");
 }
 
+/* Define the current bench position as zero for both TIM2 and RS422 references. */
+static void AppRuntime_KeyboardZeroCurrentPosition(void)
+{
+    Rs422Encoder_Status_t rs422_status = {0};
+    uint8_t rs422_has_frame = Rs422Encoder_GetLatest(&rs422_status);
+    uint8_t rs422_zero_ok = 0U;
+
+    PositionControl_Disable();
+    PulseControl_Stop();
+    EncoderReader_Reset();
+
+#if RS422_ENCODER_READER_ENABLE
+    if (rs422_has_frame != 0U) {
+        rs422_zero_ok = Rs422Encoder_SetZeroCurrent();
+    }
+#endif
+
+    PositionControl_Reset();
+    g_keyboard_target_steer_deg = 0.0f;
+    (void)PositionControl_SetTargetWithSource(0.0f, CMD_SRC_KEYBOARD);
+    AppRuntime_ServiceSensorSupervisor();
+
+    printf("[KB] zero set tim2=reset rs422=%s raw=%ld zero=%ld frames=%lu\r\n",
+           (rs422_zero_ok != 0U) ? "set" : ((rs422_has_frame != 0U) ? "failed" : "no_frame"),
+           (long)rs422_status.last_count,
+           (long)rs422_status.last_count,
+           (unsigned long)rs422_status.frames);
+    AppRuntime_KeyboardPrintControlSnapshot("zero");
+}
+
 /* Print the interactive keyboard bench-test help text. */
 static void AppRuntime_KeyboardPrintHelp(void)
 {
-    printf("[KB] A:left D:right S:center E:enable Q:disable X:estop P:print L:csv H:help step=%.1f deg\r\n",
+    printf("[KB] A:left D:right S:center Z:zero E:enable Q:disable X:estop P:print L:csv H:help step=%.1f deg\r\n",
            APP_RUNTIME_KEYBOARD_STEP_DEG);
     printf("[KB] numeric target: type steering deg then Enter. ex) 5, -3.5, 0\r\n");
 }
@@ -800,6 +991,12 @@ static void AppRuntime_KeyboardProcessInput(void)
         AppRuntime_KeyboardClearLine();
         g_keyboard_target_steer_deg = 0.0f;
         AppRuntime_KeyboardApplyTarget();
+        break;
+
+    case 'z':
+    case 'Z':
+        AppRuntime_KeyboardClearLine();
+        AppRuntime_KeyboardZeroCurrentPosition();
         break;
 
     case 'e':
@@ -1025,7 +1222,15 @@ static void AppRuntime_ServiceFastTick(void)
     PulseControl_Stop();
 #endif
 #else
+#if APP_RUNTIME_SENSOR_DIAG_ENABLE
+    if (g_sensor_diag.encoder_sample_valid != 0U) {
+        PositionControl_UpdateWithCurrentAngle(g_sensor_diag.encoder.motor_deg);
+    } else {
+        PositionControl_Update();
+    }
+#else
     PositionControl_Update();
+#endif
 #endif
 
     AppRuntime_ServiceEncoderRuntimeDiag();
@@ -1054,11 +1259,14 @@ void AppRuntime_Init(void)
 #else
     EncoderReader_EnableVirtualFeedback(0U);
 #endif
+#if APP_RUNTIME_ADC_POT_ENABLE
     ADC_Pot_Init(NULL);
+#endif
     Homing_Init();
     PositionControl_Init();
-    (void)CanEncoderBridge_Init();
+#if RS422_ENCODER_READER_ENABLE
     (void)Rs422Encoder_Init();
+#endif
 
     Relay_ServoOn();
     HAL_Delay(500);
@@ -1080,7 +1288,7 @@ void AppRuntime_Init(void)
     AppRuntime_ResetVirtualEncoder();
     AppRuntime_ResetSensorDiag();
 
-#if APP_RUNTIME_AUTO_HOME_ON_BOOT
+#if (APP_RUNTIME_AUTO_HOME_ON_BOOT && APP_RUNTIME_ADC_POT_ENABLE)
     if (Homing_FindZero() != 0) {
         printf("[Homing] Boot homing failed: reason=%s xerr=%.3f deg\r\n",
                Homing_GetLastFailureReason(),
@@ -1089,7 +1297,9 @@ void AppRuntime_Init(void)
 #endif
 
     EncoderReader_Service();
+#if APP_RUNTIME_ADC_POT_ENABLE
     ADC_Pot_Service();
+#endif
     AppRuntime_ServiceSensorSupervisor();
     PositionControl_SetTargetWithSource(AppRuntime_TargetSteeringDegToMotorDeg(0.0f), CMD_SRC_LOCALTEST);
 #if APP_RUNTIME_KEYBOARD_TEST_MODE
@@ -1117,8 +1327,9 @@ void AppRuntime_Init(void)
 /* Run one application super-loop iteration on top of the CubeMX main loop. */
 void AppRuntime_RunIteration(void)
 {
-    CanEncoderBridge_Service();
+#if RS422_ENCODER_READER_ENABLE
     Rs422Encoder_Service();
+#endif
 
 #if APP_RUNTIME_KEYBOARD_TEST_MODE
     LAT_BEGIN(LAT_STAGE_COMMS);

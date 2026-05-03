@@ -24,8 +24,11 @@ typedef struct {
     uint32_t last_print_tick_ms;
     uint32_t last_status_print_tick_ms;
     int32_t last_count;
+    int32_t zero_count;
+    int32_t last_relative_count;
     float last_motor_deg;
     float last_steering_deg;
+    uint8_t zero_valid;
 } Rs422Encoder_Context_t;
 
 static Rs422Encoder_Context_t g_rs422_encoder;
@@ -97,11 +100,30 @@ uint8_t Rs422Encoder_GetLatest(Rs422Encoder_Status_t *out_status)
     out_status->uart_errors = g_rs422_encoder.uart_errors;
     out_status->partial_dumps = g_rs422_encoder.partial_dumps;
     out_status->last_count = g_rs422_encoder.last_count;
+    out_status->zero_count = g_rs422_encoder.zero_count;
+    out_status->last_relative_count = g_rs422_encoder.last_relative_count;
     out_status->last_motor_deg = g_rs422_encoder.last_motor_deg;
     out_status->last_steering_deg = g_rs422_encoder.last_steering_deg;
+    out_status->zero_valid = g_rs422_encoder.zero_valid;
     out_status->last_frame_tick_ms = g_rs422_encoder.last_frame_tick_ms;
 
     return (g_rs422_encoder.frames > 0U) ? 1U : 0U;
+}
+
+uint8_t Rs422Encoder_SetZeroCurrent(void)
+{
+    if ((g_rs422_encoder.initialized == 0U) || (g_rs422_encoder.frames == 0U)) {
+        return 0U;
+    }
+
+    g_rs422_encoder.zero_count = g_rs422_encoder.last_count;
+    g_rs422_encoder.zero_valid = 1U;
+    g_rs422_encoder.last_relative_count = 0;
+    g_rs422_encoder.last_motor_deg = 0.0f;
+    g_rs422_encoder.last_steering_deg = 0.0f;
+    g_rs422_encoder.last_print_tick_ms = 0U;
+
+    return 1U;
 }
 
 static void Rs422Encoder_ProcessByte(uint8_t byte)
@@ -126,6 +148,7 @@ static void Rs422Encoder_ProcessFrame(void)
 {
     uint32_t raw_value = 0U;
     int32_t encoder_count = 0;
+    int32_t relative_count = 0;
     float motor_deg = 0.0f;
     float steering_deg = 0.0f;
     uint32_t now_ms = HAL_GetTick();
@@ -136,11 +159,19 @@ static void Rs422Encoder_ProcessFrame(void)
                 ((uint32_t)g_rs422_encoder.rx_buf[2] << 16) |
                 ((uint32_t)g_rs422_encoder.rx_buf[3] << 24);
     encoder_count = (int32_t)raw_value;
-    motor_deg = (float)encoder_count * ENCODER_DEG_PER_COUNT;
+
+    if (g_rs422_encoder.zero_valid != 0U) {
+        relative_count = encoder_count - g_rs422_encoder.zero_count;
+    } else {
+        relative_count = encoder_count;
+    }
+
+    motor_deg = (float)relative_count * ENCODER_DEG_PER_COUNT;
     steering_deg = MotorDegToSteeringDeg(motor_deg);
 
     g_rs422_encoder.frames++;
     g_rs422_encoder.last_count = encoder_count;
+    g_rs422_encoder.last_relative_count = relative_count;
     g_rs422_encoder.last_motor_deg = motor_deg;
     g_rs422_encoder.last_steering_deg = steering_deg;
     g_rs422_encoder.last_frame_tick_ms = now_ms;
@@ -157,14 +188,17 @@ static void Rs422Encoder_ProcessFrame(void)
 
     if (should_print != 0U) {
         g_rs422_encoder.last_print_tick_ms = now_ms;
-        printf("[RS422] HEX=%02X %02X %02X %02X Encoder Count:%ld Motor Deg:%.3f Current Deg:%.3f\r\n",
+        printf("[RS422] HEX=%02X %02X %02X %02X Raw Count:%ld Rel Count:%ld Motor Deg:%.3f Current Deg:%.3f Zero:%ld/%u\r\n",
                (unsigned int)g_rs422_encoder.rx_buf[0],
                (unsigned int)g_rs422_encoder.rx_buf[1],
                (unsigned int)g_rs422_encoder.rx_buf[2],
                (unsigned int)g_rs422_encoder.rx_buf[3],
                (long)encoder_count,
+               (long)relative_count,
                motor_deg,
-               steering_deg);
+               steering_deg,
+               (long)g_rs422_encoder.zero_count,
+               (unsigned int)g_rs422_encoder.zero_valid);
     }
 }
 
@@ -197,12 +231,15 @@ static void Rs422Encoder_PrintStatusIfDue(uint32_t now_ms)
     }
 
     g_rs422_encoder.last_status_print_tick_ms = now_ms;
-    printf("[RS422][STAT] bytes=%lu frames=%lu rx_len=%u uart_errors=%lu partial=%lu last_count=%ld current_deg=%.3f\r\n",
+    printf("[RS422][STAT] bytes=%lu frames=%lu rx_len=%u uart_errors=%lu partial=%lu raw=%ld rel=%ld zero=%ld/%u current_deg=%.3f\r\n",
            (unsigned long)g_rs422_encoder.bytes,
            (unsigned long)g_rs422_encoder.frames,
            (unsigned int)g_rs422_encoder.rx_len,
            (unsigned long)g_rs422_encoder.uart_errors,
            (unsigned long)g_rs422_encoder.partial_dumps,
            (long)g_rs422_encoder.last_count,
+           (long)g_rs422_encoder.last_relative_count,
+           (long)g_rs422_encoder.zero_count,
+           (unsigned int)g_rs422_encoder.zero_valid,
            g_rs422_encoder.last_steering_deg);
 }

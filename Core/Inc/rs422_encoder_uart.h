@@ -11,13 +11,17 @@ typedef struct {
     uint32_t uart_errors;
     uint32_t partial_dumps;
     int32_t last_count;
+    int32_t zero_count;
+    int32_t last_relative_count;
     float last_motor_deg;
     float last_steering_deg;
+    uint8_t zero_valid;
     uint32_t last_frame_tick_ms;
 } Rs422Encoder_Status_t;
 
 int Rs422Encoder_Init(void);
 void Rs422Encoder_Service(void);
 uint8_t Rs422Encoder_GetLatest(Rs422Encoder_Status_t *out_status);
+uint8_t Rs422Encoder_SetZeroCurrent(void);
 
 #endif /* RS422_ENCODER_UART_H */
