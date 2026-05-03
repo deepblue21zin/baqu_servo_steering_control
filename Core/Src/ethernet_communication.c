@@ -300,10 +300,6 @@ static volatile SteerMode_t g_current_mode = STEER_MODE_NONE;
 static volatile bool        g_emergency_request = false;
 static volatile uint32_t    g_last_rx_tick = 0U;
 
-#define ASMS_IP_LAST_OCTET   5U
-#define PC_IP_LAST_OCTET     1U
-#define ASMS_PACKET_SIZE     5U
-#define PC_PACKET_SIZE       9U
 #define ETHCOMM_DEBUG        0
 
 static float clamp_deg(float v)
@@ -365,7 +361,7 @@ static void udp_recv_cb(void *arg,
 #endif
 
     /* ── 5 bytes: ASMS mode + joystick ── */
-    if (len == ASMS_PACKET_SIZE && sender == ASMS_IP_LAST_OCTET) {
+    if (len == ETHCOMM_ASMS_PACKET_SIZE && sender == ETHCOMM_ASMS_IP_LAST_OCTET) {
         uint8_t mode = buffer[0];
         int16_t joy_y = (int16_t)((buffer[4] << 8) | buffer[3]);
 
@@ -390,7 +386,7 @@ static void udp_recv_cb(void *arg,
     }
 
     /* ── 9 bytes: PC steer/speed/misc (AUTO mode only) ── */
-    if (len == PC_PACKET_SIZE && sender == PC_IP_LAST_OCTET) {
+    if (len == ETHCOMM_PC_PACKET_SIZE && sender == ETHCOMM_PC_IP_LAST_OCTET) {
         if (g_current_mode != STEER_MODE_AUTO) {
 #if ETHCOMM_DEBUG
             printf("[EthComm][PC] ignored: mode=%d\r\n", (int)g_current_mode);

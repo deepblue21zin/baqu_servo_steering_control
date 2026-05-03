@@ -75,6 +75,44 @@ static bool stats_prev_error_valid = false;
         } \
     } while (0)
 
+static const char* PositionControl_GetConfiguredSafetyProfileName(void)
+{
+#if POSITION_FAILSAFE_EXTRA_ENABLE
+#if POSITION_FAILSAFE_PROFILE == POSITION_FAILSAFE_PROFILE_PARAM_TEST
+    return "PARAM_TEST";
+#elif POSITION_FAILSAFE_PROFILE == POSITION_FAILSAFE_PROFILE_VEHICLE_TEST
+    return "VEHICLE_TEST";
+#else
+    return "UNKNOWN";
+#endif
+#else
+    return "SOFT_LIMIT_ONLY";
+#endif
+}
+
+static SafetyLimits_t PositionControl_GetConfiguredSafetyLimits(void)
+{
+    SafetyLimits_t limits = {
+        .max_error_allowed = 0.0f,
+        .max_velocity = 0.0f,
+        .watchdog_timeout_ms = 0U
+    };
+
+#if POSITION_FAILSAFE_EXTRA_ENABLE
+#if POSITION_FAILSAFE_PROFILE == POSITION_FAILSAFE_PROFILE_PARAM_TEST
+    limits.max_error_allowed = POSITION_FAILSAFE_PARAM_TEST_MAX_ERROR_DEG;
+    limits.max_velocity = POSITION_FAILSAFE_PARAM_TEST_MAX_VELOCITY_DEG_PER_S;
+    limits.watchdog_timeout_ms = POSITION_FAILSAFE_PARAM_TEST_TIMEOUT_MS;
+#elif POSITION_FAILSAFE_PROFILE == POSITION_FAILSAFE_PROFILE_VEHICLE_TEST
+    limits.max_error_allowed = POSITION_FAILSAFE_VEHICLE_TEST_MAX_ERROR_DEG;
+    limits.max_velocity = POSITION_FAILSAFE_VEHICLE_TEST_MAX_VELOCITY_DEG_PER_S;
+    limits.watchdog_timeout_ms = POSITION_FAILSAFE_VEHICLE_TEST_TIMEOUT_MS;
+#endif
+#endif
+
+    return limits;
+}
+
 static void PositionControl_ReportError(PosCtrl_Error_t error)
 {
     state.last_error = error;
@@ -297,11 +335,9 @@ static float PID_Calculate(float error, float dt)
 
 int PositionControl_Init(void)
 {
-    PositionControlSafety_Init(&(SafetyLimits_t){
-        .max_error_allowed = MAX_TRACKING_ERROR_DEG,
-        .max_velocity = 0.0f,
-        .watchdog_timeout_ms = POSITION_COMMAND_TIMEOUT_MS
-    });
+    SafetyLimits_t configured_limits = PositionControl_GetConfiguredSafetyLimits();
+
+    PositionControlSafety_Init(&configured_limits);
 
     pid_state.prev_error = 0.0f;
     pid_state.integral = 0.0f;
@@ -337,11 +373,16 @@ int PositionControl_Init(void)
     PositionControl_ClearStats();
     PositionControl_SyncDiagState();
 
-    POSCTRL_LOG(DEBUG_INFO, "[PosCtrl] Initialized\r\n");
+    POSCTRL_LOG(DEBUG_INFO,
+                "[PosCtrl] Initialized (failsafe profile=%s, soft_limit=ON, tracking=%.2f deg, velocity=%.2f deg/s, timeout=%lu ms)\r\n",
+                PositionControl_GetConfiguredSafetyProfileName(),
+                configured_limits.max_error_allowed,
+                configured_limits.max_velocity,
+                (unsigned long)configured_limits.watchdog_timeout_ms);
     return POS_CTRL_OK;
 }
 
-void PositionControl_Update(void)
+void PositionControl_UpdateWithCurrentAngle(float current_angle)
 {
     bool was_stable = state.is_stable;
     uint32_t current_time = 0U;
@@ -351,7 +392,7 @@ void PositionControl_Update(void)
     DBG_LOOP_SET();
 
     if (!control_enabled) {
-        state.current_angle = EncoderReader_GetAngleDeg();
+        state.current_angle = current_angle;
         state.error = state.target_angle - state.current_angle;
         state.output = 0.0f;
         measured_velocity_deg_per_s = 0.0f;
@@ -363,7 +404,7 @@ void PositionControl_Update(void)
     }
 
     LAT_BEGIN(LAT_STAGE_SENSE);
-    state.current_angle = EncoderReader_GetAngleDeg();
+    state.current_angle = current_angle;
     current_time = HAL_GetTick();
     dt = (current_time - pid_state.last_time_ms) / 1000.0f;
     if (dt <= 0.0f) {
@@ -452,6 +493,11 @@ void PositionControl_Update(void)
 
     PositionControl_SyncDiagState();
     DBG_LOOP_RESET();
+}
+
+void PositionControl_Update(void)
+{
+    PositionControl_UpdateWithCurrentAngle(EncoderReader_GetAngleDeg());
 }
 
 int PositionControl_SetTarget(float target_deg)
@@ -668,19 +714,33 @@ void PositionControl_EmergencyStop(void)
     }
 
     control_enabled = false;
+#if APP_RUNTIME_EMERGENCY_LATCH_ENABLE
     control_mode = CTRL_MODE_EMERGENCY;
     state.mode = CTRL_MODE_EMERGENCY;
+#else
+    control_mode = CTRL_MODE_IDLE;
+    state.mode = CTRL_MODE_IDLE;
+#endif
     state.output = 0.0f;
     PulseControl_Stop();
     pid_state.integral = 0.0f;
     Relay_Emergency();
 
+#if APP_RUNTIME_EMERGENCY_LATCH_ENABLE
     POSCTRL_LOG(DEBUG_ERROR,
                 "[PosCtrl] EMERGENCY STOP! FLT=%d Ang:%.1f Err:%.1f Vel:%.1f\r\n",
                 (int)fault_flag,
                 state.current_angle,
                 state.error,
                 measured_velocity_deg_per_s);
+#else
+    POSCTRL_LOG(DEBUG_WARNING,
+                "[PosCtrl] Bench stop, emergency latch disabled. FLT=%d Ang:%.1f Err:%.1f Vel:%.1f\r\n",
+                (int)fault_flag,
+                state.current_angle,
+                state.error,
+                measured_velocity_deg_per_s);
+#endif
 
     measured_velocity_deg_per_s = 0.0f;
     PositionControl_SyncDiagState();

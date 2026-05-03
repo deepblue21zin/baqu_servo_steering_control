@@ -19,7 +19,6 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "adc.h"
-#include "can.h"
 #include "iwdg.h"
 #include "lwip.h"
 #include "tim.h"
@@ -29,6 +28,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app_runtime.h"
+#include "project_params.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -93,13 +93,12 @@ int main(void)
   MX_GPIO_Init();
   MX_USART3_UART_Init();
   MX_USART1_UART_Init();
-  MX_USART2_UART_Init();
-  MX_CAN1_Init();
   MX_ADC1_Init();
   MX_TIM1_Init();
   MX_IWDG_Init();
   MX_LWIP_Init();
   MX_TIM2_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
   AppRuntime_Init();
   /* USER CODE END 2 */
