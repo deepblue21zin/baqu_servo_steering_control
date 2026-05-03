@@ -16,6 +16,8 @@
 #define APP_RUNTIME_KEYBOARD_TEST_MODE           1        /* keyboard-local test path vs UDP path selection */
 #define APP_RUNTIME_KEYBOARD_AUTO_ENABLE_ON_TARGET 1      /* bench-only: target input also enables control */
 #define APP_RUNTIME_EMERGENCY_LATCH_ENABLE       0        /* bench-only: 0 stops output without latching CTRL_MODE_EMERGENCY */
+#define APP_RUNTIME_KEYBOARD_AUTO_ENABLE_ON_TARGET 1      /* bench-only: target input also enables control */
+#define APP_RUNTIME_EMERGENCY_LATCH_ENABLE       0        /* bench-only: 0 stops output without latching CTRL_MODE_EMERGENCY */
 #define APP_RUNTIME_KEYBOARD_STEP_DEG            1.0f     /* +/- steering step used by keyboard jog commands */
 #define APP_RUNTIME_ENCODER_DIAG_ENABLE          1        /* periodic encoder runtime diagnostic prints */
 #define APP_RUNTIME_ENCODER_DIAG_PERIOD_MS       100U     /* encoder diagnostic report period */
@@ -81,6 +83,20 @@
 #define POSITION_FAILSAFE_VEHICLE_TEST_MAX_ERROR_DEG      800.0f
 #define POSITION_FAILSAFE_VEHICLE_TEST_MAX_VELOCITY_DEG_PER_S 450.0f
 #define POSITION_FAILSAFE_VEHICLE_TEST_TIMEOUT_MS         5000U
+#define POSITION_FAILSAFE_EXTRA_ENABLE       1            /* enable tracking/velocity/timeout fail-safe profile */
+#define POSITION_FAILSAFE_PROFILE_PARAM_TEST 1U           /* tuning profile with relaxed nuisance-trip limits */
+#define POSITION_FAILSAFE_PROFILE_VEHICLE_TEST 2U         /* vehicle/field-test profile with active safety limits */
+#define POSITION_FAILSAFE_PROFILE            POSITION_FAILSAFE_PROFILE_PARAM_TEST
+#if ((POSITION_FAILSAFE_PROFILE != POSITION_FAILSAFE_PROFILE_PARAM_TEST) && \
+     (POSITION_FAILSAFE_PROFILE != POSITION_FAILSAFE_PROFILE_VEHICLE_TEST))
+#error "POSITION_FAILSAFE_PROFILE must be PARAM_TEST or VEHICLE_TEST"
+#endif
+#define POSITION_FAILSAFE_PARAM_TEST_MAX_ERROR_DEG        MAX_TRACKING_ERROR_DEG
+#define POSITION_FAILSAFE_PARAM_TEST_MAX_VELOCITY_DEG_PER_S 0.0f
+#define POSITION_FAILSAFE_PARAM_TEST_TIMEOUT_MS           0U
+#define POSITION_FAILSAFE_VEHICLE_TEST_MAX_ERROR_DEG      800.0f
+#define POSITION_FAILSAFE_VEHICLE_TEST_MAX_VELOCITY_DEG_PER_S 450.0f
+#define POSITION_FAILSAFE_VEHICLE_TEST_TIMEOUT_MS         5000U
 
 /* ========== Pulse Output ==========
  * Primary use: Core/Inc/pulse_control.h, Core/Src/pulse_control.c
@@ -118,6 +134,7 @@
 #define SENSOR_CROSSCHECK_FAULT_PERSIST_MS         50U       /* persistence window before runtime fault trip */
 
 #define SENSOR_DIRECTION_MIN_APPLIED_HZ          5000U       /* ignore direction plausibility below this command magnitude */
+#define SENSOR_DIRECTION_PLAUSIBILITY_ENABLE        0        /* bench-only: 0 disables command-vs-encoder direction checks */
 #define SENSOR_DIRECTION_PLAUSIBILITY_ENABLE        1        /* bench-only: command-vs-encoder direction mismatch trips fast */
 #define SENSOR_DIRECTION_MIN_STEERING_DELTA_DEG   0.0003f    /* about half an encoder-count on steering axis */
 #define SENSOR_DIRECTION_WARN_PERSIST_MS           20U       /* mismatch persistence window before warning */
@@ -129,6 +146,10 @@
 /* ========== Ethernet / UDP Integration ==========
  * Primary use: Core/Inc/ethernet_communication.h, Core/Src/ethernet_communication.c, Core/Src/app_runtime.c
  */
+#define ETHCOMM_ASMS_IP_LAST_OCTET            5U           /* sender IP x.x.x.5 for ASMS mode/joystick packets */
+#define ETHCOMM_PC_IP_LAST_OCTET              1U           /* sender IP x.x.x.1 for PC steering packets */
+#define ETHCOMM_ASMS_PACKET_SIZE              5U           /* ASMS packet length: mode + joy_x + joy_y */
+#define ETHCOMM_PC_PACKET_SIZE                9U           /* PC packet length: steer + speed + misc */
 #define ETHCOMM_ASMS_IP_LAST_OCTET            5U           /* sender IP x.x.x.5 for ASMS mode/joystick packets */
 #define ETHCOMM_PC_IP_LAST_OCTET              1U           /* sender IP x.x.x.1 for PC steering packets */
 #define ETHCOMM_ASMS_PACKET_SIZE              5U           /* ASMS packet length: mode + joy_x + joy_y */
@@ -149,6 +170,8 @@
 /* ========== Runtime Sensor Supervision ==========
  * Primary use: Core/Src/app_runtime.c
  */
+#define APP_RUNTIME_ADC_POT_ENABLE             0          /* 0: encoder-only bench mode; disables ADC homing/crosscheck */
+#define APP_RUNTIME_AUTO_HOME_ON_BOOT          0          /* perform ADC-backed homing before enabling control */
 #define APP_RUNTIME_ADC_POT_ENABLE             0          /* 0: encoder-only bench mode; disables ADC homing/crosscheck */
 #define APP_RUNTIME_AUTO_HOME_ON_BOOT          0          /* perform ADC-backed homing before enabling control */
 #define APP_RUNTIME_SENSOR_DIAG_ENABLE         1          /* enable runtime sensor supervision and logs */
