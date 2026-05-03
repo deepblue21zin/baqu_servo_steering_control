@@ -8,6 +8,7 @@
 #include "usart.h"
 
 #include "adc_potentiometer.h"
+#include "can_encoder_bridge.h"
 #include "constants.h"
 #include "encoder_reader.h"
 #include "ethernet_communication.h"
@@ -784,7 +785,7 @@ static void AppRuntime_KeyboardZeroCurrentPosition(void)
     printf("[KB] zero set tim2=reset rs422=%s raw=%ld zero=%ld frames=%lu\r\n",
            (rs422_zero_ok != 0U) ? "set" : ((rs422_has_frame != 0U) ? "failed" : "no_frame"),
            (long)rs422_status.last_count,
-           (long)rs422_status.last_count,
+           (long)rs422_status.zero_count,
            (unsigned long)rs422_status.frames);
     AppRuntime_KeyboardPrintControlSnapshot("zero");
 }
@@ -1128,6 +1129,9 @@ void AppRuntime_Init(void)
 #endif
     Homing_Init();
     PositionControl_Init();
+#if CAN_ENCODER_BRIDGE_ENABLE
+    (void)CanEncoderBridge_Init();
+#endif
 #if RS422_ENCODER_READER_ENABLE
     (void)Rs422Encoder_Init();
 #endif
@@ -1191,6 +1195,9 @@ void AppRuntime_Init(void)
 /* Run one application super-loop iteration on top of the CubeMX main loop. */
 void AppRuntime_RunIteration(void)
 {
+#if CAN_ENCODER_BRIDGE_ENABLE
+    CanEncoderBridge_Service();
+#endif
 #if RS422_ENCODER_READER_ENABLE
     Rs422Encoder_Service();
 #endif

@@ -30,18 +30,28 @@
 #define APP_RUNTIME_AUTO_START_CONTROL_ENABLE    1        /* auto-enable closed-loop control after module initialization */
 #define APP_RUNTIME_RESET_ENCODER_ON_BOOT        1        /* zero the logical encoder origin during boot to match current firmware baseline */
 
-/* ========== Encoder Serial Input ==========
+/* ========== CAN Encoder Bridge ==========
+ * Primary use: Core/Src/can_encoder_bridge.c, Core/Src/usart.c
+ */
+#define CAN_ENCODER_BRIDGE_ENABLE                1        /* USART1 4-byte encoder stream -> CAN1 frame bridge */
+#define CAN_ENCODER_UART_BAUDRATE            38400U       /* must match the servo drive RS422 encoder-port setting */
+#define CAN_ENCODER_BRIDGE_STD_ID            0x100U       /* CAN standard ID used for encoder frames */
+#define CAN_ENCODER_BRIDGE_MAX_BYTES_PER_SERVICE 16U      /* bounded non-blocking UART drain per super-loop pass */
+#define CAN_ENCODER_BRIDGE_LOG_ENABLE            1        /* boot log for bridge readiness */
+
+/* ========== RS422 Servo Encoder Reader ==========
  * Primary use: Core/Src/rs422_encoder_uart.c, Core/Src/usart.c
  */
-#define RS422_ENCODER_READER_ENABLE             1        /* USART2 PA3 RX-only RS422 encoder stream reader */
-#define RS422_ENCODER_UART_BAUDRATE         38400U       /* must match the servo drive RS422 encoder-port setting */
-#define RS422_ENCODER_FRAME_SIZE                4U       /* current decoder expects 4-byte little-endian signed count frames */
-#define RS422_ENCODER_MAX_BYTES_PER_SERVICE    32U       /* bounded non-blocking UART drain per super-loop pass */
-#define RS422_ENCODER_PRINT_EACH_FRAME          0        /* 1 prints every decoded frame; 0 rate-limits after initial burst */
-#define RS422_ENCODER_PRINT_FIRST_FRAMES      16U        /* print the first N UART frames for verification after boot */
-#define RS422_ENCODER_PRINT_PERIOD_MS         100U       /* period for printing UART frames after the initial burst */
-#define RS422_ENCODER_IDLE_DUMP_MS           50U          /* dump UART buffer contents after this long without new data */
-#define RS422_ENCODER_STATUS_LOG_PERIOD_MS     1000U        /* periodic log of bridge status and UART buffer counts */
+#define RS422_ENCODER_READER_ENABLE              1        /* USART2 PA3 RX -> Putty hex/count/degree diagnostic */
+#define RS422_ENCODER_UART_BAUDRATE          38400U       /* must match the servo CN4 RS422 setting */
+#define RS422_ENCODER_FRAME_SIZE                 4U       /* default: 4-byte little-endian signed encoder count */
+#define RS422_ENCODER_MAX_BYTES_PER_SERVICE     32U       /* bounded non-blocking UART drain per super-loop pass */
+#define RS422_ENCODER_PRINT_EACH_FRAME           0        /* 1: print every decoded frame; use briefly only */
+#define RS422_ENCODER_PRINT_FIRST_FRAMES        16U       /* first frames printed with HEX for bring-up */
+#define RS422_ENCODER_PRINT_PERIOD_MS          100U       /* after first frames, print latest decoded value at this period */
+#define RS422_ENCODER_IDLE_DUMP_MS              50U       /* dump partial HEX line when bytes stop arriving */
+#define RS422_ENCODER_STATUS_LOG_PERIOD_MS    1000U       /* print bytes/frames counters while bringing up wiring */
+
 /* ========== Position Control ==========
  * Primary use: Core/Inc/position_control.h, Core/Src/position_control.c
  */
@@ -130,34 +140,6 @@
 #define AUTODRIVE_UDP_PORT                5000U           /* UDP listen port for upper-controller packets */
 #define ETHCOMM_RX_TIMEOUT_MS              300U           /* upper-controller receive timeout used by app runtime */
 #define ETHCOMM_LOG_ENABLE                   0            /* verbose Ethernet/UDP parser log enable */
-
-/* ========== CAN Runtime ==========
- * Primary use: Core/Src/can_runtime.c
- */
-#define APP_RUNTIME_CAN_ENABLE                  0U        /* bench RS422 mode: disable CAN runtime/peripheral startup */
-#define APP_RUNTIME_CAN_RX_LOG_ENABLE           1U        /* default RX frame log switch for bench builds */
-#define APP_RUNTIME_CAN_AUTO_START              1U        /* start CAN automatically when the runtime is used */
-#define APP_RUNTIME_CAN_ACCEPT_ALL_FILTER       1U        /* receive all frames on filter bank 0 */
-#define APP_RUNTIME_CAN_MODE_NORMAL             0U
-#define APP_RUNTIME_CAN_MODE_LOOPBACK           1U
-#define APP_RUNTIME_CAN_MODE                    APP_RUNTIME_CAN_MODE_NORMAL
-#if ((APP_RUNTIME_CAN_MODE != APP_RUNTIME_CAN_MODE_NORMAL) && \
-     (APP_RUNTIME_CAN_MODE != APP_RUNTIME_CAN_MODE_LOOPBACK))
-#error "APP_RUNTIME_CAN_MODE must be NORMAL or LOOPBACK"
-#endif
-#define APP_RUNTIME_CAN_PRESCALER               5U        /* APB1 45 MHz / 5 / 18 tq = 500 kbit/s */
-#define APP_RUNTIME_CAN_BS1_TQ                 13U        /* matches generated MX_CAN1_Init() */
-#define APP_RUNTIME_CAN_BS2_TQ                  4U        /* matches generated MX_CAN1_Init() */
-#define APP_RUNTIME_CAN_SJW_TQ                  1U
-#define APP_RUNTIME_CAN_AUTO_BUS_OFF_ENABLE     1U
-#define APP_RUNTIME_CAN_NO_AUTO_RETRANSMISSION  0U        /* 0 keeps HAL AutoRetransmission enabled */
-#define APP_RUNTIME_CAN_INIT_TIMEOUT_MS        50U
-#define APP_RUNTIME_CAN_TX_TIMEOUT_MS          20U
-#define APP_RUNTIME_CAN_CMD_STEER_STDID     0x201U
-#define APP_RUNTIME_CAN_CMD_CONTROL_STDID   0x202U
-#define APP_RUNTIME_CAN_QUERY_STDID         0x203U
-#define APP_RUNTIME_CAN_STATUS_STDID        0x301U
-#define APP_RUNTIME_CAN_TEST_TX_STDID       0x321U
 
 /* ========== Latency Profiler ==========
  * Primary use: Core/Inc/latency_profiler.h, Core/Src/latency_profiler.c, Core/Src/app_runtime.c
