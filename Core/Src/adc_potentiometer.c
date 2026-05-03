@@ -7,6 +7,7 @@
 
 #include "adc.h"
 #include "constants.h"
+#include "project_params.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -46,6 +47,24 @@ static ADC_PotDiag_t g_pot_diag = {
     .initialized = 0U
 };
 
+static uint8_t ADC_Pot_ReadRaw(uint16_t *out_raw, uint32_t timeout_ms)
+{
+    if ((out_raw == NULL) || (pot_config.hadc == NULL)) {
+        return 0U;
+    }
+
+    if (HAL_ADC_Start(pot_config.hadc) != HAL_OK) {
+        return 0U;
+    }
+
+    if (HAL_ADC_PollForConversion(pot_config.hadc, timeout_ms) != HAL_OK) {
+        return 0U;
+    }
+
+    *out_raw = (uint16_t)HAL_ADC_GetValue(pot_config.hadc);
+    return 1U;
+}
+
 static float ADC_Pot_ConvertRawToAngle(uint16_t raw)
 {
     if (pot_config.max_raw <= pot_config.min_raw) {
@@ -58,7 +77,20 @@ static float ADC_Pot_ConvertRawToAngle(uint16_t raw)
             (float)(pot_config.max_raw - pot_config.min_raw));
 }
 
-static uint32_t ADC_Pot_EvaluateValidity(uint16_t raw)
+static uint32_t ADC_Pot_GetCalibrationChecksum(void)
+{
+    int32_t min_angle_x1000 = (int32_t)(pot_config.min_angle * 1000.0f);
+    int32_t max_angle_x1000 = (int32_t)(pot_config.max_angle * 1000.0f);
+
+    return 0x41504341UL ^
+           ADC_POT_CALIBRATION_VERSION ^
+           (uint32_t)pot_config.min_raw ^
+           ((uint32_t)pot_config.max_raw << 16) ^
+           (uint32_t)min_angle_x1000 ^
+           (uint32_t)max_angle_x1000;
+}
+
+static uint32_t ADC_Pot_EvaluateValidity(uint16_t raw, uint8_t conversion_timeout, uint32_t sample_tick_ms)
 {
     uint32_t flags = ADC_POT_VALID;
     uint16_t diff = (raw >= g_pot_diag.prev_raw) ? (raw - g_pot_diag.prev_raw) :
@@ -67,6 +99,10 @@ static uint32_t ADC_Pot_EvaluateValidity(uint16_t raw)
     /* MODIFIED(Codex): surface disconnect/range/jump/stuck information to callers via validity bits. */
     if (g_pot_diag.initialized == 0U) {
         flags |= ADC_POT_INVALID_NOT_INIT;
+    }
+    if (conversion_timeout != 0U) {
+        flags |= ADC_POT_INVALID_TIMEOUT;
+        return flags;
     }
     if ((raw <= g_pot_diag.disconnect_low_raw) || (raw >= g_pot_diag.disconnect_high_raw)) {
         flags |= ADC_POT_INVALID_DISCONNECT;
@@ -86,7 +122,7 @@ static uint32_t ADC_Pot_EvaluateValidity(uint16_t raw)
     }
 
     g_pot_diag.prev_raw = raw;
-    g_pot_diag.last_sample_tick_ms = HAL_GetTick();
+    g_pot_diag.last_sample_tick_ms = sample_tick_ms;
     return flags;
 }
 
@@ -111,15 +147,17 @@ int ADC_Pot_Init(ADC_PotConfig_t *config)
     return 0;
 }
 
+void ADC_Pot_Service(void)
+{
+    /* ADC conversion is sampled on demand by ADC_Pot_GetSample(). */
+}
+
 uint16_t ADC_Pot_GetRaw(void)
 {
-    if (pot_config.hadc == NULL) {
-        return 0U;
-    }
+    uint16_t raw = 0U;
 
-    HAL_ADC_Start(pot_config.hadc);
-    if (HAL_ADC_PollForConversion(pot_config.hadc, 100U) == HAL_OK) {
-        return (uint16_t)HAL_ADC_GetValue(pot_config.hadc);
+    if (ADC_Pot_ReadRaw(&raw, ADC_POT_CONVERSION_TIMEOUT_MS) != 0U) {
+        return raw;
     }
 
     return 0U;
@@ -140,20 +178,39 @@ uint8_t ADC_Pot_GetSample(ADC_PotSample_t *out_sample)
 {
     uint16_t raw = 0U;
     uint32_t now_ms = 0U;
+    uint8_t conversion_timeout = 0U;
 
     if (out_sample == NULL) {
         return 0U;
     }
 
-    raw = ADC_Pot_GetRaw();
+    if (ADC_Pot_ReadRaw(&raw, ADC_POT_CONVERSION_TIMEOUT_MS) == 0U) {
+        raw = g_pot_diag.prev_raw;
+        conversion_timeout = 1U;
+    }
     now_ms = HAL_GetTick();
 
     out_sample->raw = raw;
     out_sample->voltage = ((float)raw * ADC_VREF) / ADC_MAX_COUNT;
     out_sample->calibrated_angle_deg = ADC_Pot_ConvertRawToAngle(raw);
     out_sample->sample_tick_ms = now_ms;
-    out_sample->age_ms = now_ms - g_pot_diag.last_sample_tick_ms;
-    out_sample->validity = ADC_Pot_EvaluateValidity(raw);
+    out_sample->age_ms = (conversion_timeout == 0U) ? 0U : (now_ms - g_pot_diag.last_sample_tick_ms);
+    out_sample->validity = ADC_Pot_EvaluateValidity(raw, conversion_timeout, now_ms);
+    return 1U;
+}
+
+uint8_t ADC_Pot_GetCalibration(ADC_PotCalibration_t *out_calibration)
+{
+    if (out_calibration == NULL) {
+        return 0U;
+    }
+
+    out_calibration->version = ADC_POT_CALIBRATION_VERSION;
+    out_calibration->checksum = ADC_Pot_GetCalibrationChecksum();
+    out_calibration->min_raw = pot_config.min_raw;
+    out_calibration->max_raw = pot_config.max_raw;
+    out_calibration->min_angle = pot_config.min_angle;
+    out_calibration->max_angle = pot_config.max_angle;
     return 1U;
 }
 

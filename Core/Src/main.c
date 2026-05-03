@@ -28,6 +28,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app_runtime.h"
+#include "project_params.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -97,6 +98,10 @@ int main(void)
   MX_IWDG_Init();
   MX_LWIP_Init();
   MX_TIM2_Init();
+#if APP_RUNTIME_CAN_ENABLE
+  MX_CAN1_Init();
+#endif
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
   AppRuntime_Init();
   /* USER CODE END 2 */

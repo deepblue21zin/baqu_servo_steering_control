@@ -38,11 +38,22 @@ typedef struct {
     uint32_t validity;
 } ADC_PotSample_t; /* MODIFIED(Codex): calibrated sample + validity bits. */
 
+typedef struct {
+    uint32_t version;
+    uint32_t checksum;
+    uint16_t min_raw;
+    uint16_t max_raw;
+    float min_angle;
+    float max_angle;
+} ADC_PotCalibration_t;
+
 int ADC_Pot_Init(ADC_PotConfig_t *config);
+void ADC_Pot_Service(void);
 uint16_t ADC_Pot_GetRaw(void);
 float ADC_Pot_GetVoltage(void);
 float ADC_Pot_GetAngle(void);
 uint8_t ADC_Pot_GetSample(ADC_PotSample_t *out_sample);
+uint8_t ADC_Pot_GetCalibration(ADC_PotCalibration_t *out_calibration);
 void ADC_Pot_Calibrate(float min_angle, float max_angle);
 
 #endif /* ADC_POTENTIOMETER_H */

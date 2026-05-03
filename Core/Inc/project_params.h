@@ -14,6 +14,8 @@
 #define APP_RUNTIME_AUTO_FIXED_PULSE_TEST        0        /* bench-only fixed pulse mode in AppRuntime_ServiceFastTick() */
 #define APP_RUNTIME_AUTO_FIXED_PULSE_HZ          500000   /* fixed pulse frequency when the bench mode above is enabled */
 #define APP_RUNTIME_KEYBOARD_TEST_MODE           1        /* keyboard-local test path vs UDP path selection */
+#define APP_RUNTIME_KEYBOARD_AUTO_ENABLE_ON_TARGET 1      /* bench-only: target input also enables control */
+#define APP_RUNTIME_EMERGENCY_LATCH_ENABLE       0        /* bench-only: 0 stops output without latching CTRL_MODE_EMERGENCY */
 #define APP_RUNTIME_KEYBOARD_STEP_DEG            1.0f     /* +/- steering step used by keyboard jog commands */
 #define APP_RUNTIME_ENCODER_DIAG_ENABLE          1        /* periodic encoder runtime diagnostic prints */
 #define APP_RUNTIME_ENCODER_DIAG_PERIOD_MS       100U     /* encoder diagnostic report period */
@@ -28,6 +30,18 @@
 #define APP_RUNTIME_AUTO_START_CONTROL_ENABLE    1        /* auto-enable closed-loop control after module initialization */
 #define APP_RUNTIME_RESET_ENCODER_ON_BOOT        1        /* zero the logical encoder origin during boot to match current firmware baseline */
 
+/* ========== Encoder Serial Input ==========
+ * Primary use: Core/Src/rs422_encoder_uart.c, Core/Src/usart.c
+ */
+#define RS422_ENCODER_READER_ENABLE             1        /* USART2 PA3 RX-only RS422 encoder stream reader */
+#define RS422_ENCODER_UART_BAUDRATE         38400U       /* must match the servo drive RS422 encoder-port setting */
+#define RS422_ENCODER_FRAME_SIZE                4U       /* current decoder expects 4-byte little-endian signed count frames */
+#define RS422_ENCODER_MAX_BYTES_PER_SERVICE    32U       /* bounded non-blocking UART drain per super-loop pass */
+#define RS422_ENCODER_PRINT_EACH_FRAME          0        /* 1 prints every decoded frame; 0 rate-limits after initial burst */
+#define RS422_ENCODER_PRINT_FIRST_FRAMES      16U        /* print the first N UART frames for verification after boot */
+#define RS422_ENCODER_PRINT_PERIOD_MS         100U       /* period for printing UART frames after the initial burst */
+#define RS422_ENCODER_IDLE_DUMP_MS           50U          /* dump UART buffer contents after this long without new data */
+#define RS422_ENCODER_STATUS_LOG_PERIOD_MS     1000U        /* periodic log of bridge status and UART buffer counts */
 /* ========== Position Control ==========
  * Primary use: Core/Inc/position_control.h, Core/Src/position_control.c
  */
@@ -47,6 +61,20 @@
  * Primary use: Core/Src/position_control_safety.c
  */
 #define POSITION_SAFETY_ANGLE_MARGIN_DEG    5.0f          /* extra angle margin outside MAX/MIN_ANGLE_DEG before fault */
+#define POSITION_FAILSAFE_EXTRA_ENABLE       1            /* enable tracking/velocity/timeout fail-safe profile */
+#define POSITION_FAILSAFE_PROFILE_PARAM_TEST 1U           /* tuning profile with relaxed nuisance-trip limits */
+#define POSITION_FAILSAFE_PROFILE_VEHICLE_TEST 2U         /* vehicle/field-test profile with active safety limits */
+#define POSITION_FAILSAFE_PROFILE            POSITION_FAILSAFE_PROFILE_PARAM_TEST
+#if ((POSITION_FAILSAFE_PROFILE != POSITION_FAILSAFE_PROFILE_PARAM_TEST) && \
+     (POSITION_FAILSAFE_PROFILE != POSITION_FAILSAFE_PROFILE_VEHICLE_TEST))
+#error "POSITION_FAILSAFE_PROFILE must be PARAM_TEST or VEHICLE_TEST"
+#endif
+#define POSITION_FAILSAFE_PARAM_TEST_MAX_ERROR_DEG        MAX_TRACKING_ERROR_DEG
+#define POSITION_FAILSAFE_PARAM_TEST_MAX_VELOCITY_DEG_PER_S 0.0f
+#define POSITION_FAILSAFE_PARAM_TEST_TIMEOUT_MS           0U
+#define POSITION_FAILSAFE_VEHICLE_TEST_MAX_ERROR_DEG      800.0f
+#define POSITION_FAILSAFE_VEHICLE_TEST_MAX_VELOCITY_DEG_PER_S 450.0f
+#define POSITION_FAILSAFE_VEHICLE_TEST_TIMEOUT_MS         5000U
 
 /* ========== Pulse Output ==========
  * Primary use: Core/Inc/pulse_control.h, Core/Src/pulse_control.c
@@ -56,12 +84,80 @@
 #define PULSECONTROL_MAX_FREQ_HZ        100000U           /* firmware-side pulse clamp for TIM1 generation */
 #define PULSECONTROL_DIRECTION_GUARD_MS      1U           /* stop-to-reverse guard time before direction flip */
 
+/* ========== Sensor Contract / Diagnostics ==========
+ * Primary use: Core/Src/encoder_reader.c, Core/Src/adc_potentiometer.c,
+ *              Core/Src/homing.c, Core/Src/app_runtime.c
+ */
+#define SENSOR_POSITIVE_STEERING_IS_CW                 1  /* +steering_deg corresponds to physical CW steering rotation */
+#define SENSOR_POSITIVE_MOTOR_IS_CW                    1  /* +motor_deg corresponds to physical CW motor rotation */
+#define ENCODER_COUNT_POLARITY                         1  /* +1: encoder count increase means +motor_deg, -1 flips sensor polarity */
+#define ADC_POT_STEERING_POLARITY                      1  /* +1: increasing raw moves toward +steering_deg, -1 flips sensor polarity */
+#define SENSOR_DIR_PIN_ONE_IS_CW        DIR_ACTIVE_HIGH_FOR_CW /* DIR GPIO level 1 physical direction contract */
+
+#define ENCODER_SAMPLE_STALE_WARN_MS                20U  /* warning when encoder cache is older than this */
+#define ENCODER_SAMPLE_STALE_FAULT_MS               50U  /* fault when encoder cache is older than this */
+#define ADC_POT_SAMPLE_STALE_WARN_MS                20U  /* warning when ADC cache is older than this */
+#define ADC_POT_SAMPLE_STALE_FAULT_MS               50U  /* fault when ADC cache is older than this */
+#define ADC_POT_CONVERSION_TIMEOUT_MS               20U  /* timeout for non-blocking ADC conversion completion */
+
+#define ENCODER_VELOCITY_WARN_STEERING_DPS          60.0f    /* steering-axis plausibility warning threshold */
+#define ENCODER_VELOCITY_FAULT_STEERING_DPS        120.0f    /* steering-axis plausibility fault threshold */
+#define ENCODER_ACCEL_WARN_STEERING_DPS2         50000.0f    /* steering-axis acceleration warning threshold */
+#define ENCODER_ACCEL_FAULT_STEERING_DPS2       150000.0f    /* steering-axis acceleration fault threshold */
+
+#define SENSOR_CROSSCHECK_WARN_STEERING_DEG         2.0f     /* runtime encoder-vs-ADC warning threshold */
+#define SENSOR_CROSSCHECK_FAULT_STEERING_DEG        5.0f     /* runtime encoder-vs-ADC fault threshold */
+#define SENSOR_HOMING_CROSSCHECK_FAULT_DEG          2.0f     /* homing acceptance threshold after encoder offset is applied */
+#define SENSOR_CROSSCHECK_WARN_PERSIST_MS          20U       /* persistence window before runtime warning log */
+#define SENSOR_CROSSCHECK_FAULT_PERSIST_MS         50U       /* persistence window before runtime fault trip */
+
+#define SENSOR_DIRECTION_MIN_APPLIED_HZ          5000U       /* ignore direction plausibility below this command magnitude */
+#define SENSOR_DIRECTION_PLAUSIBILITY_ENABLE        0        /* bench-only: 0 disables command-vs-encoder direction checks */
+#define SENSOR_DIRECTION_MIN_STEERING_DELTA_DEG   0.0003f    /* about half an encoder-count on steering axis */
+#define SENSOR_DIRECTION_WARN_PERSIST_MS           20U       /* mismatch persistence window before warning */
+#define SENSOR_DIRECTION_FAULT_PERSIST_MS          75U       /* mismatch persistence window before fault */
+
+#define ADC_POT_CALIBRATION_VERSION                 1U       /* persisted calibration format version */
+#define ADC_POT_CALIBRATION_STORAGE_ENABLED         1        /* backup-SRAM persistence switch */
+
 /* ========== Ethernet / UDP Integration ==========
  * Primary use: Core/Inc/ethernet_communication.h, Core/Src/ethernet_communication.c, Core/Src/app_runtime.c
  */
+#define ETHCOMM_ASMS_IP_LAST_OCTET            5U           /* sender IP x.x.x.5 for ASMS mode/joystick packets */
+#define ETHCOMM_PC_IP_LAST_OCTET              1U           /* sender IP x.x.x.1 for PC steering packets */
+#define ETHCOMM_ASMS_PACKET_SIZE              5U           /* ASMS packet length: mode + joy_x + joy_y */
+#define ETHCOMM_PC_PACKET_SIZE                9U           /* PC packet length: steer + speed + misc */
 #define AUTODRIVE_UDP_PORT                5000U           /* UDP listen port for upper-controller packets */
 #define ETHCOMM_RX_TIMEOUT_MS              300U           /* upper-controller receive timeout used by app runtime */
 #define ETHCOMM_LOG_ENABLE                   0            /* verbose Ethernet/UDP parser log enable */
+
+/* ========== CAN Runtime ==========
+ * Primary use: Core/Src/can_runtime.c
+ */
+#define APP_RUNTIME_CAN_ENABLE                  0U        /* bench RS422 mode: disable CAN runtime/peripheral startup */
+#define APP_RUNTIME_CAN_RX_LOG_ENABLE           1U        /* default RX frame log switch for bench builds */
+#define APP_RUNTIME_CAN_AUTO_START              1U        /* start CAN automatically when the runtime is used */
+#define APP_RUNTIME_CAN_ACCEPT_ALL_FILTER       1U        /* receive all frames on filter bank 0 */
+#define APP_RUNTIME_CAN_MODE_NORMAL             0U
+#define APP_RUNTIME_CAN_MODE_LOOPBACK           1U
+#define APP_RUNTIME_CAN_MODE                    APP_RUNTIME_CAN_MODE_NORMAL
+#if ((APP_RUNTIME_CAN_MODE != APP_RUNTIME_CAN_MODE_NORMAL) && \
+     (APP_RUNTIME_CAN_MODE != APP_RUNTIME_CAN_MODE_LOOPBACK))
+#error "APP_RUNTIME_CAN_MODE must be NORMAL or LOOPBACK"
+#endif
+#define APP_RUNTIME_CAN_PRESCALER               5U        /* APB1 45 MHz / 5 / 18 tq = 500 kbit/s */
+#define APP_RUNTIME_CAN_BS1_TQ                 13U        /* matches generated MX_CAN1_Init() */
+#define APP_RUNTIME_CAN_BS2_TQ                  4U        /* matches generated MX_CAN1_Init() */
+#define APP_RUNTIME_CAN_SJW_TQ                  1U
+#define APP_RUNTIME_CAN_AUTO_BUS_OFF_ENABLE     1U
+#define APP_RUNTIME_CAN_NO_AUTO_RETRANSMISSION  0U        /* 0 keeps HAL AutoRetransmission enabled */
+#define APP_RUNTIME_CAN_INIT_TIMEOUT_MS        50U
+#define APP_RUNTIME_CAN_TX_TIMEOUT_MS          20U
+#define APP_RUNTIME_CAN_CMD_STEER_STDID     0x201U
+#define APP_RUNTIME_CAN_CMD_CONTROL_STDID   0x202U
+#define APP_RUNTIME_CAN_QUERY_STDID         0x203U
+#define APP_RUNTIME_CAN_STATUS_STDID        0x301U
+#define APP_RUNTIME_CAN_TEST_TX_STDID       0x321U
 
 /* ========== Latency Profiler ==========
  * Primary use: Core/Inc/latency_profiler.h, Core/Src/latency_profiler.c, Core/Src/app_runtime.c
@@ -71,5 +167,12 @@
 #define LATENCY_MAX_SAMPLES               2048U           /* retained samples per stage before saturation */
 #define LATENCY_AUTO_REPORT_ENABLE           1            /* automatic batch report emission enable */
 #define LATENCY_AUTO_REPORT_SAMPLES       2000U           /* samples required before each auto-report batch */
+
+/* ========== Runtime Sensor Supervision ==========
+ * Primary use: Core/Src/app_runtime.c
+ */
+#define APP_RUNTIME_ADC_POT_ENABLE             0          /* 0: encoder-only bench mode; disables ADC homing/crosscheck */
+#define APP_RUNTIME_AUTO_HOME_ON_BOOT          0          /* perform ADC-backed homing before enabling control */
+#define APP_RUNTIME_SENSOR_DIAG_ENABLE         1          /* enable runtime sensor supervision and logs */
 
 #endif /* PROJECT_PARAMS_H */

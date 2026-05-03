@@ -58,6 +58,18 @@ HomingStatus_t Homing_GetStatus(void);
 const char* Homing_GetStatusString(void);
 
 /**
+ * @brief Get the last homing failure reason.
+ * @return Static reason string, or "none" when no failure is latched
+ */
+const char* Homing_GetLastFailureReason(void);
+
+/**
+ * @brief Get the last encoder-vs-ADC homing crosscheck error in steering degrees.
+ * @return Signed error in steering degrees
+ */
+float Homing_GetLastCrosscheckErrorDeg(void);
+
+/**
  * @brief Reset homing state
  */
 void Homing_Reset(void);
