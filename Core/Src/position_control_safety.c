@@ -5,8 +5,8 @@
 #include <math.h>
 
 static SafetyLimits_t position_control_safety_limits = {
-    .max_error_allowed = MAX_TRACKING_ERROR_DEG,
-    .max_velocity = 0.0f,
+    .max_error_motor_deg = MAX_TRACKING_ERROR_MOTOR_DEG,
+    .max_velocity_motor_deg_per_s = 0.0f,
     .watchdog_timeout_ms = 0U
 };
 
@@ -24,6 +24,7 @@ static PositionControlSafetyResult_t PositionControlSafety_Ok(void)
 }
 
 /* Build a failing result without triggering any actuator-side effect. */
+#if POSITION_CONTROL_SAFETY_ENABLE
 static PositionControlSafetyResult_t PositionControlSafety_Trip(uint8_t fault_flag,
                                                                 PosCtrl_Error_t error,
                                                                 CommandResult_t result_code)
@@ -37,6 +38,7 @@ static PositionControlSafetyResult_t PositionControlSafety_Trip(uint8_t fault_fl
 
     return result;
 }
+#endif
 
 /* Normalize externally supplied limits before storing them. */
 static SafetyLimits_t PositionControlSafety_NormalizeLimits(const SafetyLimits_t* limits)
@@ -47,10 +49,10 @@ static SafetyLimits_t PositionControlSafety_NormalizeLimits(const SafetyLimits_t
         return normalized;
     }
 
-    if (limits->max_error_allowed > 0.0f) {
-        normalized.max_error_allowed = fabsf(limits->max_error_allowed);
+    if (limits->max_error_motor_deg > 0.0f) {
+        normalized.max_error_motor_deg = fabsf(limits->max_error_motor_deg);
     }
-    normalized.max_velocity = fabsf(limits->max_velocity);
+    normalized.max_velocity_motor_deg_per_s = fabsf(limits->max_velocity_motor_deg_per_s);
     normalized.watchdog_timeout_ms = limits->watchdog_timeout_ms;
 
     return normalized;
@@ -60,8 +62,8 @@ static SafetyLimits_t PositionControlSafety_NormalizeLimits(const SafetyLimits_t
 void PositionControlSafety_Init(const SafetyLimits_t* initial_limits)
 {
     position_control_safety_limits = (SafetyLimits_t){
-        .max_error_allowed = MAX_TRACKING_ERROR_DEG,
-        .max_velocity = 0.0f,
+        .max_error_motor_deg = MAX_TRACKING_ERROR_MOTOR_DEG,
+        .max_velocity_motor_deg_per_s = 0.0f,
         .watchdog_timeout_ms = 0U
     };
 
@@ -87,30 +89,57 @@ SafetyLimits_t PositionControlSafety_GetLimits(void)
 }
 
 /* Evaluate all local safety criteria without directly stopping the actuator. */
-PositionControlSafetyResult_t PositionControlSafety_Evaluate(float current_angle,
-                                                             float tracking_error,
-                                                             float measured_velocity_deg_per_s)
+PositionControlSafetyResult_t PositionControlSafety_Evaluate(float current_motor_deg,
+                                                             float tracking_error_motor_deg,
+                                                             float measured_velocity_motor_deg_per_s)
 {
-    if (current_angle > MAX_ANGLE_DEG + POSITION_SAFETY_ANGLE_MARGIN_DEG ||
-        current_angle < MIN_ANGLE_DEG - POSITION_SAFETY_ANGLE_MARGIN_DEG) {
+#if !POSITION_CONTROL_SAFETY_ENABLE
+    (void)current_motor_deg;
+    (void)tracking_error_motor_deg;
+    (void)measured_velocity_motor_deg_per_s;
+    return PositionControlSafety_Ok();
+#else
+    if (current_motor_deg > MAX_MOTOR_ANGLE_DEG + POSITION_SAFETY_ANGLE_MARGIN_DEG ||
+        current_motor_deg < MIN_MOTOR_ANGLE_DEG - POSITION_SAFETY_ANGLE_MARGIN_DEG) {
         return PositionControlSafety_Trip(1U,
                                           POS_CTRL_ERR_OVER_LIMIT,
                                           CMD_RESULT_FAULT_LIMIT);
     }
 
-    if ((position_control_safety_limits.max_error_allowed > 0.0f) &&
-        (fabsf(tracking_error) > position_control_safety_limits.max_error_allowed)) {
+    if ((position_control_safety_limits.max_error_motor_deg > 0.0f) &&
+        (fabsf(tracking_error_motor_deg) > position_control_safety_limits.max_error_motor_deg)) {
         return PositionControlSafety_Trip(2U,
                                           POS_CTRL_ERR_SAFETY,
                                           CMD_RESULT_FAULT_TRACKING);
     }
 
-    if ((position_control_safety_limits.max_velocity > 0.0f) &&
-        (fabsf(measured_velocity_deg_per_s) > position_control_safety_limits.max_velocity)) {
+    if ((position_control_safety_limits.max_velocity_motor_deg_per_s > 0.0f) &&
+        (fabsf(measured_velocity_motor_deg_per_s) > position_control_safety_limits.max_velocity_motor_deg_per_s)) {
         return PositionControlSafety_Trip(4U,
                                           POS_CTRL_ERR_VELOCITY,
                                           CMD_RESULT_FAULT_VELOCITY);
     }
 
     return PositionControlSafety_Ok();
+#endif
+}
+
+PositionControlSafetyResult_t PositionControlSafety_EvaluateCommandTimeout(uint32_t start_ms,
+                                                                           uint32_t timeout_ms,
+                                                                           uint32_t now_ms)
+{
+#if !POSITION_CONTROL_SAFETY_ENABLE
+    (void)start_ms;
+    (void)timeout_ms;
+    (void)now_ms;
+    return PositionControlSafety_Ok();
+#else
+    if ((timeout_ms > 0U) && ((now_ms - start_ms) > timeout_ms)) {
+        return PositionControlSafety_Trip(3U,
+                                          POS_CTRL_ERR_TIMEOUT,
+                                          CMD_RESULT_TIMEOUT);
+    }
+
+    return PositionControlSafety_Ok();
+#endif
 }

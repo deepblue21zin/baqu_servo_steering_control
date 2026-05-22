@@ -11,7 +11,11 @@
 
 // Mechanical conversion constants
 #define STEERING_GEAR_RATIO             12.5f
-#define MOTOR_DEG_PER_STEERING_DEG      STEERING_GEAR_RATIO
+#define MOTOR_TO_STEERING_POLARITY     -1
+#if ((MOTOR_TO_STEERING_POLARITY != 1) && (MOTOR_TO_STEERING_POLARITY != -1))
+#error "MOTOR_TO_STEERING_POLARITY must be +1 or -1"
+#endif
+#define MOTOR_DEG_PER_STEERING_DEG      ((float)MOTOR_TO_STEERING_POLARITY * STEERING_GEAR_RATIO)
 #define STEERING_DEG_PER_MOTOR_DEG      (1.0f / MOTOR_DEG_PER_STEERING_DEG)
 
 // Servo drive constants
@@ -23,10 +27,6 @@
 // Steering-axis limits
 #define MAX_STEERING_ANGLE      45.0f
 #define MIN_STEERING_ANGLE     -45.0f
-#define POT_MIN_ANGLE_DEG      MIN_STEERING_ANGLE  /* MODIFIED(Codex): shared ADC steering range */
-#define POT_MAX_ANGLE_DEG      MAX_STEERING_ANGLE  /* MODIFIED(Codex): shared ADC steering range */
-#define ADC_VREF               3.3f                /* MODIFIED(Codex): shared ADC scaling */
-#define ADC_MAX_COUNT          4095.0f             /* MODIFIED(Codex): shared ADC scaling */
 
 // Control tolerances
 #define POSITION_TOLERANCE      0.5f

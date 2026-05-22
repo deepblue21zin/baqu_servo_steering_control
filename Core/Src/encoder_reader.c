@@ -1,6 +1,6 @@
 /**
  * @file encoder_reader.c
- * @brief Encoder reader implementation
+ * @brief TIM2 encoder reader implementation.
  */
 
 #include "encoder_reader.h"
@@ -9,271 +9,247 @@
 #include "project_params.h"
 #include "tim.h"
 
-#include <stdio.h>
+#include <stdint.h>
 
 #define ENCODER_TIMER htim2
-#define ENCODER_COUNTER_CENTER 32768UL
+#define ENCODER_COUNTER_CENTER 0x80000000UL
 
 typedef struct {
-    uint16_t raw_count;
-    uint16_t prev_raw_count;
+    uint32_t raw_count;
+    uint32_t prev_raw_count;
     int32_t delta_count;
     int64_t accum_count;
-    int32_t offset_count;
+    int64_t offset_count;
     uint32_t sample_tick_ms;
-    uint8_t virtual_feedback_enabled;
-    uint16_t virtual_raw_count;
-    int32_t virtual_delta_count;
-    int64_t virtual_accum_count;
-    uint32_t virtual_sample_tick_ms;
-    float last_diag_velocity_steering_dps;
+    EncoderSample_t last_sample;
     uint8_t initialized;
-} EncoderReader_State_t; /* MODIFIED(Codex): keep raw/delta/accum/timestamp in one state block. */
+} EncoderReader_State_t;
 
 static EncoderReader_State_t g_encoder = {0};
 
-static int64_t EncoderReader_UpdateCount(void);
-
-static uint32_t EncoderReader_EvaluateValidity(const EncoderSample_t *sample)
+static int32_t EncoderReader_ApplyCountPolarity(int32_t count)
 {
-    uint32_t flags = ENCODER_VALID;
-    float dt_s = 0.001f;
-    float steering_delta_deg = 0.0f;
-    float velocity_steering_dps = 0.0f;
-    float accel_steering_dps2 = 0.0f;
-
-    if (g_encoder.initialized == 0U) {
-        flags |= ENCODER_INVALID_NOT_INIT;
-    }
-
-    if (sample->age_ms >= ENCODER_SAMPLE_STALE_WARN_MS) {
-        flags |= ENCODER_WARN_STALE;
-    }
-    if (sample->age_ms >= ENCODER_SAMPLE_STALE_FAULT_MS) {
-        flags |= ENCODER_FAULT_STALE;
-    }
-
-    if (sample->age_ms > 0U) {
-        dt_s = ((float)sample->age_ms) * 0.001f;
-    }
-
-    steering_delta_deg = MotorDegToSteeringDeg((float)sample->delta_count * ENCODER_DEG_PER_COUNT);
-    velocity_steering_dps = steering_delta_deg / dt_s;
-    if (velocity_steering_dps < 0.0f) {
-        velocity_steering_dps = -velocity_steering_dps;
-    }
-
-    if (velocity_steering_dps >= ENCODER_VELOCITY_WARN_STEERING_DPS) {
-        flags |= ENCODER_WARN_VELOCITY;
-    }
-    if (velocity_steering_dps >= ENCODER_VELOCITY_FAULT_STEERING_DPS) {
-        flags |= ENCODER_FAULT_VELOCITY;
-    }
-
-    accel_steering_dps2 = (velocity_steering_dps - g_encoder.last_diag_velocity_steering_dps) / dt_s;
-    if (accel_steering_dps2 < 0.0f) {
-        accel_steering_dps2 = -accel_steering_dps2;
-    }
-    g_encoder.last_diag_velocity_steering_dps = velocity_steering_dps;
-
-    if (accel_steering_dps2 >= ENCODER_ACCEL_WARN_STEERING_DPS2) {
-        flags |= ENCODER_WARN_ACCEL;
-    }
-    if (accel_steering_dps2 >= ENCODER_ACCEL_FAULT_STEERING_DPS2) {
-        flags |= ENCODER_FAULT_ACCEL;
-    }
-
-    return flags;
+#if ENCODER_COUNT_POLARITY < 0
+    return -count;
+#else
+    return count;
+#endif
 }
 
-static void EncoderReader_FillSample(EncoderSample_t *out_sample,
-                                     uint16_t raw_count,
-                                     int32_t delta_count,
-                                     int64_t accum_count,
-                                     uint32_t sample_tick_ms,
-                                     uint32_t now_ms)
+static int64_t EncoderReader_MotorDegToCount(float motor_deg)
 {
-    out_sample->raw_count = raw_count;
-    out_sample->delta_count = delta_count;
-    out_sample->accum_count = accum_count - (int64_t)g_encoder.offset_count;
-    out_sample->motor_deg = (float)out_sample->accum_count * ENCODER_DEG_PER_COUNT;
-    out_sample->steering_deg = MotorDegToSteeringDeg(out_sample->motor_deg);
-    out_sample->sample_tick_ms = sample_tick_ms;
-    out_sample->age_ms = now_ms - sample_tick_ms;
-    out_sample->validity = EncoderReader_EvaluateValidity(out_sample);
-}
+    float count_f = motor_deg / ENCODER_DEG_PER_COUNT;
 
-static uint16_t EncoderReader_GetVirtualRawCount(void)
-{
-    int32_t raw32 = (int32_t)ENCODER_COUNTER_CENTER + (int32_t)g_encoder.virtual_accum_count;
-    return (uint16_t)raw32;
-}
-
-static int64_t EncoderReader_GetActiveCount(void)
-{
-    if (g_encoder.virtual_feedback_enabled != 0U) {
-        return g_encoder.virtual_accum_count;
+    if (count_f >= 0.0f) {
+        return (int64_t)(count_f + 0.5f);
     }
-
-    return EncoderReader_UpdateCount();
+    return (int64_t)(count_f - 0.5f);
 }
 
-static int64_t EncoderReader_UpdateCount(void)
+static void EncoderReader_FillLastSample(uint32_t raw_count,
+                                         int32_t delta_count,
+                                         int64_t accum_count,
+                                         uint32_t sample_tick_ms,
+                                         uint32_t interval_ms)
 {
-    uint16_t raw = (uint16_t)__HAL_TIM_GET_COUNTER(&ENCODER_TIMER);
-    int16_t signed_delta = (int16_t)(raw - g_encoder.prev_raw_count);
-    int32_t adjusted_delta = (ENCODER_COUNT_POLARITY < 0) ?
-                             -(int32_t)signed_delta :
-                             (int32_t)signed_delta;
+    EncoderSample_t sample = {0};
 
-    /* Unwrap the 16-bit hardware counter, then apply the configured encoder polarity. */
-    g_encoder.raw_count = raw;
-    g_encoder.delta_count = adjusted_delta;
-    g_encoder.accum_count += adjusted_delta;
-    g_encoder.prev_raw_count = raw;
-    g_encoder.sample_tick_ms = HAL_GetTick();
+    sample.raw_count = raw_count;
+    sample.delta_count = delta_count;
+    sample.accum_count = accum_count - g_encoder.offset_count;
+    sample.motor_deg = (float)sample.accum_count * ENCODER_DEG_PER_COUNT;
+    sample.steering_deg = MotorDegToSteeringDeg(sample.motor_deg);
+    sample.age_ms = 0U;
+    sample.interval_ms = interval_ms;
+    sample.sample_tick_ms = sample_tick_ms;
+    sample.validity = EncoderDiag_EvaluateInit(g_encoder.initialized);
+    sample.validity |= EncoderDiag_EvaluateMotion(delta_count, interval_ms);
 
-    return g_encoder.accum_count;
+    g_encoder.raw_count = raw_count;
+    g_encoder.delta_count = delta_count;
+    g_encoder.accum_count = accum_count;
+    g_encoder.sample_tick_ms = sample_tick_ms;
+    g_encoder.last_sample = sample;
 }
 
-int EncoderReader_Init(void)
+static uint8_t EncoderReader_CopyLastSample(EncoderSample_t *out_sample)
 {
-    __HAL_TIM_SET_COUNTER(&ENCODER_TIMER, ENCODER_COUNTER_CENTER);
-
-    g_encoder.raw_count = (uint16_t)__HAL_TIM_GET_COUNTER(&ENCODER_TIMER);
-    g_encoder.prev_raw_count = g_encoder.raw_count;
-    g_encoder.delta_count = 0;
-    g_encoder.accum_count = 0;
-    g_encoder.offset_count = 0;
-    g_encoder.sample_tick_ms = HAL_GetTick();
-    g_encoder.virtual_feedback_enabled = 0U;
-    g_encoder.virtual_raw_count = (uint16_t)ENCODER_COUNTER_CENTER;
-    g_encoder.virtual_delta_count = 0;
-    g_encoder.virtual_accum_count = 0;
-    g_encoder.virtual_sample_tick_ms = g_encoder.sample_tick_ms;
-    g_encoder.last_diag_velocity_steering_dps = 0.0f;
-    g_encoder.initialized = 1U;
-
-    printf("[Encoder] Initialized\n");
-    return 0;
-}
-
-void EncoderReader_Service(void)
-{
-    /* Sampling remains demand-driven through EncoderReader_GetSample(). */
-}
-
-float EncoderReader_GetAngleDeg(void)
-{
-    return EncoderReader_GetMotorDeg();
-}
-
-float EncoderReader_GetMotorDeg(void)
-{
-    int64_t adjusted_count = EncoderReader_GetActiveCount() - (int64_t)g_encoder.offset_count;
-    return (float)adjusted_count * ENCODER_DEG_PER_COUNT;
-}
-
-int32_t EncoderReader_GetCount(void)
-{
-    return (int32_t)(EncoderReader_GetActiveCount() - (int64_t)g_encoder.offset_count);
-}
-
-int32_t EncoderReader_GetDeltaCount(void)
-{
-    if (g_encoder.virtual_feedback_enabled != 0U) {
-        return g_encoder.virtual_delta_count;
-    }
-
-    EncoderReader_UpdateCount();
-    return g_encoder.delta_count;
-}
-
-uint8_t EncoderReader_GetSample(EncoderSample_t *out_sample)
-{
-    uint32_t now_ms = 0U;
+    uint32_t primask = 0U;
 
     if ((out_sample == NULL) || (g_encoder.initialized == 0U)) {
         return 0U;
     }
 
-    if (g_encoder.virtual_feedback_enabled != 0U) {
-        now_ms = HAL_GetTick();
-        EncoderReader_FillSample(out_sample,
-                                 g_encoder.virtual_raw_count,
-                                 g_encoder.virtual_delta_count,
-                                 g_encoder.virtual_accum_count,
-                                 g_encoder.virtual_sample_tick_ms,
-                                 now_ms);
-        return 1U;
+    primask = __get_PRIMASK();
+    __disable_irq();
+    *out_sample = g_encoder.last_sample;
+    if (primask == 0U) {
+        __enable_irq();
     }
 
-    EncoderReader_UpdateCount();
-    now_ms = HAL_GetTick();
+    out_sample->age_ms = HAL_GetTick() - out_sample->sample_tick_ms;
+    out_sample->validity |= EncoderDiag_EvaluateStale(out_sample->age_ms);
 
-    EncoderReader_FillSample(out_sample,
-                             g_encoder.raw_count,
-                             g_encoder.delta_count,
-                             g_encoder.accum_count,
-                             g_encoder.sample_tick_ms,
-                             now_ms);
     return 1U;
+}
+
+int EncoderReader_Init(void)
+{
+    uint32_t now_ms = HAL_GetTick();
+
+    __HAL_TIM_SET_COUNTER(&ENCODER_TIMER, ENCODER_COUNTER_CENTER);
+
+    g_encoder.raw_count = (uint32_t)__HAL_TIM_GET_COUNTER(&ENCODER_TIMER);
+    g_encoder.prev_raw_count = g_encoder.raw_count;
+    g_encoder.delta_count = 0;
+    g_encoder.accum_count = 0;
+    g_encoder.offset_count = 0;
+    g_encoder.sample_tick_ms = now_ms;
+    g_encoder.initialized = 1U;
+    EncoderDiag_Reset();
+
+    EncoderReader_FillLastSample(g_encoder.raw_count, 0, g_encoder.accum_count, now_ms, 0U);
+
+    return 0;
+}
+
+int EncoderReader_Update(void)
+{
+    uint32_t now_ms = HAL_GetTick();
+    uint32_t interval_ms = 0U;
+    uint32_t raw = 0U;
+    uint32_t raw_delta = 0U;
+    int32_t signed_delta = 0;
+    int32_t adjusted_delta = 0;
+    int64_t accum_count = 0;
+
+    if (g_encoder.initialized == 0U) {
+        return 0;
+    }
+
+    interval_ms = now_ms - g_encoder.sample_tick_ms;
+    raw = (uint32_t)__HAL_TIM_GET_COUNTER(&ENCODER_TIMER);
+    raw_delta = raw - g_encoder.prev_raw_count;
+    signed_delta = (int32_t)raw_delta;
+    adjusted_delta = EncoderReader_ApplyCountPolarity(signed_delta);
+    accum_count = g_encoder.accum_count + (int64_t)adjusted_delta;
+
+    g_encoder.prev_raw_count = raw;
+    EncoderReader_FillLastSample(raw, adjusted_delta, accum_count, now_ms, interval_ms);
+
+    return 1;
+}
+
+void EncoderReader_Service(void)
+{
+    (void)EncoderReader_Update();
+}
+
+float EncoderReader_GetMotorDeg(void)
+{
+    EncoderSample_t sample = {0};
+
+    if (EncoderReader_CopyLastSample(&sample) == 0U) {
+        return 0.0f;
+    }
+    return sample.motor_deg;
+}
+
+float EncoderReader_GetSteeringDeg(void)
+{
+    EncoderSample_t sample = {0};
+
+    if (EncoderReader_CopyLastSample(&sample) == 0U) {
+        return 0.0f;
+    }
+    return sample.steering_deg;
+}
+
+int32_t EncoderReader_GetCount(void)
+{
+    EncoderSample_t sample = {0};
+
+    if (EncoderReader_CopyLastSample(&sample) == 0U) {
+        return 0;
+    }
+    return (int32_t)sample.accum_count;
+}
+
+int32_t EncoderReader_GetDeltaCount(void)
+{
+    EncoderSample_t sample = {0};
+
+    if (EncoderReader_CopyLastSample(&sample) == 0U) {
+        return 0;
+    }
+    return sample.delta_count;
+}
+
+uint8_t EncoderReader_GetLastSample(EncoderSample_t *out_sample)
+{
+    return EncoderReader_CopyLastSample(out_sample);
 }
 
 uint32_t EncoderReader_GetRawCounter(void)
 {
-    if (g_encoder.initialized == 0U) {
-        return (uint32_t)((uint16_t)__HAL_TIM_GET_COUNTER(&ENCODER_TIMER));
-    }
+    EncoderSample_t sample = {0};
 
-    if (g_encoder.virtual_feedback_enabled != 0U) {
-        return (uint32_t)g_encoder.virtual_raw_count;
+    if (EncoderReader_CopyLastSample(&sample) == 0U) {
+        return (uint32_t)__HAL_TIM_GET_COUNTER(&ENCODER_TIMER);
     }
-
-    EncoderReader_UpdateCount();
-    return (uint32_t)g_encoder.raw_count;
+    return sample.raw_count;
 }
 
 void EncoderReader_Reset(void)
 {
+    uint32_t now_ms = HAL_GetTick();
+
     __HAL_TIM_SET_COUNTER(&ENCODER_TIMER, ENCODER_COUNTER_CENTER);
 
-    g_encoder.raw_count = (uint16_t)ENCODER_COUNTER_CENTER;
-    g_encoder.prev_raw_count = (uint16_t)ENCODER_COUNTER_CENTER;
+    g_encoder.raw_count = ENCODER_COUNTER_CENTER;
+    g_encoder.prev_raw_count = ENCODER_COUNTER_CENTER;
     g_encoder.delta_count = 0;
     g_encoder.accum_count = 0;
     g_encoder.offset_count = 0;
-    g_encoder.sample_tick_ms = HAL_GetTick();
-    g_encoder.virtual_raw_count = (uint16_t)ENCODER_COUNTER_CENTER;
-    g_encoder.virtual_delta_count = 0;
-    g_encoder.virtual_accum_count = 0;
-    g_encoder.virtual_sample_tick_ms = g_encoder.sample_tick_ms;
-    g_encoder.last_diag_velocity_steering_dps = 0.0f;
+    g_encoder.sample_tick_ms = now_ms;
+    EncoderDiag_Reset();
 
-    printf("[Encoder] Reset\n");
+    EncoderReader_FillLastSample(g_encoder.raw_count, 0, g_encoder.accum_count, now_ms, 0U);
 }
 
 void EncoderReader_SetOffset(int32_t offset)
 {
-    g_encoder.offset_count = offset;
-    printf("[Encoder] Offset set: %ld\n", offset);
+    g_encoder.offset_count = (int64_t)offset;
+    EncoderDiag_Reset();
+    EncoderReader_FillLastSample(g_encoder.raw_count,
+                                 0,
+                                 g_encoder.accum_count,
+                                 HAL_GetTick(),
+                                 0U);
 }
 
-void EncoderReader_EnableVirtualFeedback(uint8_t enable)
+void EncoderReader_SetCurrentAsZero(void)
 {
-    g_encoder.virtual_feedback_enabled = (enable != 0U) ? 1U : 0U;
-    g_encoder.virtual_delta_count = 0;
-    g_encoder.virtual_sample_tick_ms = HAL_GetTick();
+    g_encoder.offset_count = g_encoder.accum_count;
+    EncoderDiag_Reset();
+    EncoderReader_FillLastSample(g_encoder.raw_count,
+                                 0,
+                                 g_encoder.accum_count,
+                                 HAL_GetTick(),
+                                 0U);
 }
 
-void EncoderReader_SetVirtualFeedbackCount(int64_t accum_count)
+void EncoderReader_SetCurrentAsMotorDeg(float motor_deg)
 {
-    int64_t prev_count = g_encoder.virtual_accum_count;
+    int64_t desired_count = EncoderReader_MotorDegToCount(motor_deg);
 
-    g_encoder.virtual_accum_count = accum_count;
-    g_encoder.virtual_delta_count = (int32_t)(accum_count - prev_count);
-    g_encoder.virtual_raw_count = EncoderReader_GetVirtualRawCount();
-    g_encoder.virtual_sample_tick_ms = HAL_GetTick();
+    g_encoder.offset_count = g_encoder.accum_count - desired_count;
+    EncoderDiag_Reset();
+    EncoderReader_FillLastSample(g_encoder.raw_count,
+                                 0,
+                                 g_encoder.accum_count,
+                                 HAL_GetTick(),
+                                 0U);
 }
 
 uint8_t EncoderReader_IsInitialized(void)

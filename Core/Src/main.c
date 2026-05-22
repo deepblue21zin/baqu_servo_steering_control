@@ -92,13 +92,13 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART3_UART_Init();
-  MX_USART1_UART_Init();
-  MX_ADC1_Init();
   MX_TIM1_Init();
+#if APP_RUNTIME_IWDG_ENABLE
   MX_IWDG_Init();
+#endif
   MX_LWIP_Init();
   MX_TIM2_Init();
-  MX_USART2_UART_Init();
+  MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
   AppRuntime_Init();
   /* USER CODE END 2 */

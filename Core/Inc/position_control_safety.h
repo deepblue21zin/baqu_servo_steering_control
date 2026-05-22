@@ -22,9 +22,14 @@ void PositionControlSafety_SetLimits(const SafetyLimits_t* limits);
 /* Return the latest applied safety-limit snapshot. */
 SafetyLimits_t PositionControlSafety_GetLimits(void);
 
-/* Evaluate angle, tracking, and velocity limits without actuating hardware. */
-PositionControlSafetyResult_t PositionControlSafety_Evaluate(float current_angle,
-                                                             float tracking_error,
-                                                             float measured_velocity_deg_per_s);
+/* Evaluate motor-axis angle, tracking, and velocity limits without actuating hardware. */
+PositionControlSafetyResult_t PositionControlSafety_Evaluate(float current_motor_deg,
+                                                             float tracking_error_motor_deg,
+                                                             float measured_velocity_motor_deg_per_s);
+
+/* Evaluate command timeout as a safety-policy decision. */
+PositionControlSafetyResult_t PositionControlSafety_EvaluateCommandTimeout(uint32_t start_ms,
+                                                                           uint32_t timeout_ms,
+                                                                           uint32_t now_ms);
 
 #endif /* POSITION_CONTROL_SAFETY_H */

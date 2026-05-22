@@ -21,21 +21,16 @@ typedef enum {
 typedef struct {
     int32_t requested_frequency_hz;
     uint32_t applied_frequency_hz;
-    uint32_t autoreload;
-    uint32_t compare;
     MotorDirection direction;
     uint8_t output_active;
     uint8_t line_driver_enabled;
     uint8_t reverse_guard_active;
-    uint8_t busy;
+    uint8_t initialized;
 } PulseControl_Status_t;
 
 void PulseControl_Init(void);
-void PulseControl_SendSteps(uint32_t steps, MotorDirection dir);
+void PulseControl_Service(void);
 void PulseControl_Stop(void);
-uint8_t PulseControl_IsBusy(void);
-void pulse_forward(uint32_t count);
-void pulse_reverse(uint32_t count);
 void PulseControl_SetFrequency(int32_t freq_hz);
 PulseControl_Status_t PulseControl_GetStatus(void);
 
