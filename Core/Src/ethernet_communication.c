@@ -16,7 +16,6 @@
 #include "constants.h"
 #include "position_control.h"
 #include "pulse_control.h"
-#include "relay_control.h"
 #include "lwip/udp.h"
 #include "lwip/pbuf.h"
 #include "lwip/ip_addr.h"
@@ -235,24 +234,19 @@ static int EthComm_ParseCommand(const char *line, EthComm_Command_t *out_cmd)
 
 static int EthComm_DispatchCommand(const EthComm_Command_t *cmd)
 {
-    float target_motor_deg = 0.0f;
-
     if (cmd == NULL) {
         return ETH_COMM_ERR_BAD_PARAM;
     }
 
     switch (cmd->type) {
     case ETH_CMD_SERVO_ON:
-        Relay_ServoOn();
-        return EthComm_SendString("OK SERVO ON\r\n");
+        return EthComm_SendString("OK SERVO ALWAYS_ON\r\n");
 
     case ETH_CMD_SERVO_OFF:
-        Relay_ServoOff();
-        return EthComm_SendString("OK SERVO OFF\r\n");
+        return EthComm_SendString("OK SERVO ALWAYS_ON\r\n");
 
     case ETH_CMD_SET_TARGET:
-        target_motor_deg = SteeringDegToMotorDeg(cmd->f32_value);
-        if (PositionControl_SetTargetWithSource(target_motor_deg, CMD_SRC_SERVICE) != 0) {
+        if (PositionControl_SetTargetSteeringDegWithSource(cmd->f32_value, CMD_SRC_SERVICE) != 0) {
             return EthComm_SendString("ERR TARGET\r\n");
         }
         return EthComm_SendString("OK TARGET\r\n");
@@ -272,9 +266,9 @@ static int EthComm_DispatchCommand(const EthComm_Command_t *cmd)
 
 static int EthComm_SendStatus(void)
 {
-    float cur = MotorDegToSteeringDeg(PositionControl_GetCurrentAngle());
-    float tgt = MotorDegToSteeringDeg(PositionControl_GetTarget());
-    float err = MotorDegToSteeringDeg(PositionControl_GetError());
+    float cur = MotorDegToSteeringDeg(PositionControl_GetCurrentMotorDeg());
+    float tgt = MotorDegToSteeringDeg(PositionControl_GetTargetMotorDeg());
+    float err = MotorDegToSteeringDeg(PositionControl_GetErrorMotorDeg());
     int n = 0;
 
     n = snprintf((char *)g_eth.cfg.tx_buffer,
@@ -311,9 +305,24 @@ static float clamp_deg(float v)
 
 static float joy_to_deg(int16_t joy_y)
 {
-    if (joy_y > 2047) joy_y = 2047;
-    if (joy_y < -2048) joy_y = -2048;
-    return clamp_deg((360.0f * (float)joy_y) / 2047.0f);
+    int32_t raw = joy_y;
+    float denom = 2047.0f;
+
+    if (raw > 2047) raw = 2047;
+    if (raw < -2048) raw = -2048;
+
+    if ((raw < ETHCOMM_JOY_Y_DEADBAND_RAW) &&
+        (raw > -ETHCOMM_JOY_Y_DEADBAND_RAW)) {
+        raw = 0;
+    }
+
+    if (raw < 0) {
+        denom = 2048.0f;
+    }
+
+    return clamp_deg(((float)ETHCOMM_JOY_Y_POLARITY *
+                      ETHCOMM_JOY_Y_MAX_STEERING_DEG *
+                      (float)raw) / denom);
 }
 
 /**

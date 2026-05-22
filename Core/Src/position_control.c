@@ -3,13 +3,11 @@
 #include "position_control_safety.h"
 #include "encoder_reader.h"
 #include "pulse_control.h"
-#include "relay_control.h"
 #include "constants.h"
 #include "main.h"
 #include "latency_profiler.h"
 
 #include <math.h>
-#include <stdio.h>
 
 static volatile uint8_t fault_flag = 0U;
 static uint32_t command_next_id = 1U;
@@ -26,14 +24,19 @@ static PID_Params_t pid_params = {
 static struct {
     float prev_error;
     float integral;
+    float derivative_filtered;
+    float last_output_hz;
     uint32_t last_time_ms;
 } pid_state = {0};
 
 static PositionControl_State_t state = {
-    .target_angle = 0.0f,
-    .current_angle = 0.0f,
-    .error = 0.0f,
-    .output = 0.0f,
+    .target_steering_deg = 0.0f,
+    .current_steering_deg = 0.0f,
+    .error_steering_deg = 0.0f,
+    .target_motor_deg = 0.0f,
+    .current_motor_deg = 0.0f,
+    .error_motor_deg = 0.0f,
+    .output_hz = 0.0f,
     .is_stable = false,
     .stable_time_ms = 0U,
     .mode = CTRL_MODE_IDLE,
@@ -50,15 +53,10 @@ static CommandLifecycle_t command_lifecycle = {
     .timeout_ms = POSITION_COMMAND_TIMEOUT_MS
 };
 
-static PosCtrl_Stats_t controller_stats = {0};
-static PosCtrl_ErrorCallback_t error_callback = NULL;
-static PosCtrl_StableCallback_t stable_callback = NULL;
-static PosCtrl_Error_t last_notified_error = POS_CTRL_OK;
-static DebugLevel_t debug_level = DEBUG_INFO;
-static float measured_velocity_deg_per_s = 0.0f;
-static float last_velocity_angle = 0.0f;
-static float stats_prev_error = 0.0f;
-static bool stats_prev_error_valid = false;
+static float stable_error_motor_deg = STABLE_ERROR_MOTOR_DEG;
+static uint32_t stable_time_setting_ms = STABLE_TIME_MS;
+static float measured_velocity_motor_deg_per_s = 0.0f;
+static float last_velocity_motor_deg = 0.0f;
 
 #ifdef DBG_LOOP_Pin
 #define DBG_LOOP_SET() HAL_GPIO_WritePin(DBG_LOOP_GPIO_Port, DBG_LOOP_Pin, GPIO_PIN_SET)
@@ -68,44 +66,22 @@ static bool stats_prev_error_valid = false;
 #define DBG_LOOP_RESET() ((void)0)
 #endif
 
-#define POSCTRL_LOG(level, ...) \
-    do { \
-        if ((uint8_t)debug_level >= (uint8_t)(level)) { \
-            printf(__VA_ARGS__); \
-        } \
-    } while (0)
-
-static const char* PositionControl_GetConfiguredSafetyProfileName(void)
-{
-#if POSITION_FAILSAFE_EXTRA_ENABLE
-#if POSITION_FAILSAFE_PROFILE == POSITION_FAILSAFE_PROFILE_PARAM_TEST
-    return "PARAM_TEST";
-#elif POSITION_FAILSAFE_PROFILE == POSITION_FAILSAFE_PROFILE_VEHICLE_TEST
-    return "VEHICLE_TEST";
-#else
-    return "UNKNOWN";
-#endif
-#else
-    return "SOFT_LIMIT_ONLY";
-#endif
-}
-
 static SafetyLimits_t PositionControl_GetConfiguredSafetyLimits(void)
 {
     SafetyLimits_t limits = {
-        .max_error_allowed = 0.0f,
-        .max_velocity = 0.0f,
+        .max_error_motor_deg = 0.0f,
+        .max_velocity_motor_deg_per_s = 0.0f,
         .watchdog_timeout_ms = 0U
     };
 
 #if POSITION_FAILSAFE_EXTRA_ENABLE
 #if POSITION_FAILSAFE_PROFILE == POSITION_FAILSAFE_PROFILE_PARAM_TEST
-    limits.max_error_allowed = POSITION_FAILSAFE_PARAM_TEST_MAX_ERROR_DEG;
-    limits.max_velocity = POSITION_FAILSAFE_PARAM_TEST_MAX_VELOCITY_DEG_PER_S;
+    limits.max_error_motor_deg = POSITION_FAILSAFE_PARAM_TEST_MAX_ERROR_MOTOR_DEG;
+    limits.max_velocity_motor_deg_per_s = POSITION_FAILSAFE_PARAM_TEST_MAX_VELOCITY_MOTOR_DEG_PER_S;
     limits.watchdog_timeout_ms = POSITION_FAILSAFE_PARAM_TEST_TIMEOUT_MS;
 #elif POSITION_FAILSAFE_PROFILE == POSITION_FAILSAFE_PROFILE_VEHICLE_TEST
-    limits.max_error_allowed = POSITION_FAILSAFE_VEHICLE_TEST_MAX_ERROR_DEG;
-    limits.max_velocity = POSITION_FAILSAFE_VEHICLE_TEST_MAX_VELOCITY_DEG_PER_S;
+    limits.max_error_motor_deg = POSITION_FAILSAFE_VEHICLE_TEST_MAX_ERROR_MOTOR_DEG;
+    limits.max_velocity_motor_deg_per_s = POSITION_FAILSAFE_VEHICLE_TEST_MAX_VELOCITY_MOTOR_DEG_PER_S;
     limits.watchdog_timeout_ms = POSITION_FAILSAFE_VEHICLE_TEST_TIMEOUT_MS;
 #endif
 #endif
@@ -116,66 +92,19 @@ static SafetyLimits_t PositionControl_GetConfiguredSafetyLimits(void)
 static void PositionControl_ReportError(PosCtrl_Error_t error)
 {
     state.last_error = error;
-
-    if (error == POS_CTRL_OK) {
-        last_notified_error = POS_CTRL_OK;
-        return;
-    }
-
-    if ((error_callback != NULL) && (error != last_notified_error)) {
-        error_callback(error);
-    }
-
-    last_notified_error = error;
 }
 
-static void PositionControl_ResetStatsTracking(void)
+static void PositionControl_UpdateSteeringSnapshot(void)
 {
-    stats_prev_error = 0.0f;
-    stats_prev_error_valid = false;
-}
-
-static void PositionControl_ClearStats(void)
-{
-    controller_stats = (PosCtrl_Stats_t){0};
-    PositionControl_ResetStatsTracking();
-}
-
-static void PositionControl_RecordStatsSample(float error)
-{
-    float abs_error = fabsf(error);
-    uint32_t next_count = controller_stats.update_count + 1U;
-
-    controller_stats.update_count = next_count;
-
-    if (abs_error > controller_stats.max_error) {
-        controller_stats.max_error = abs_error;
-    }
-
-    if (next_count == 1U) {
-        controller_stats.avg_error = abs_error;
-    } else {
-        controller_stats.avg_error += (abs_error - controller_stats.avg_error) / (float)next_count;
-    }
-
-    if (stats_prev_error_valid) {
-        bool prev_outside = fabsf(stats_prev_error) > STABLE_ERROR_THRESHOLD;
-        bool curr_outside = abs_error > STABLE_ERROR_THRESHOLD;
-        bool crossed_zero = ((stats_prev_error > 0.0f) && (error < 0.0f)) ||
-                            ((stats_prev_error < 0.0f) && (error > 0.0f));
-
-        if (prev_outside && curr_outside && crossed_zero) {
-            controller_stats.overshoot_count++;
-        }
-    }
-
-    stats_prev_error = error;
-    stats_prev_error_valid = true;
+    state.target_steering_deg = MotorDegToSteeringDeg(state.target_motor_deg);
+    state.current_steering_deg = MotorDegToSteeringDeg(state.current_motor_deg);
+    state.error_steering_deg = MotorDegToSteeringDeg(state.error_motor_deg);
 }
 
 static void PositionControl_SyncDiagState(void)
 {
-    PositionControlDiag_UpdateDebugVars(&state, control_enabled, control_mode, fault_flag);
+    PositionControl_UpdateSteeringSnapshot();
+    PositionControlDiag_UpdateDebugVars(&state);
 }
 
 /* Mirror the latest safety evaluation into controller-local fault state. */
@@ -211,30 +140,21 @@ static void PositionControl_CommandStart(CommandSource_t source)
     uint32_t now_ms = HAL_GetTick();
     SafetyLimits_t active_limits = PositionControlSafety_GetLimits();
 
+    PositionControl_UpdateSteeringSnapshot();
+
     command_lifecycle.command_id = command_next_id++;
     command_lifecycle.state = CMD_ACTIVE;
     command_lifecycle.source = source;
     command_lifecycle.result = CMD_RESULT_NONE;
-    command_lifecycle.target_steering_deg = MotorDegToSteeringDeg(state.target_angle);
-    command_lifecycle.target_motor_deg = state.target_angle;
-    command_lifecycle.start_steering_deg = MotorDegToSteeringDeg(state.current_angle);
+    command_lifecycle.target_steering_deg = state.target_steering_deg;
+    command_lifecycle.target_motor_deg = state.target_motor_deg;
+    command_lifecycle.start_steering_deg = state.current_steering_deg;
     command_lifecycle.final_steering_deg = command_lifecycle.start_steering_deg;
-    command_lifecycle.final_error_deg = MotorDegToSteeringDeg(state.error);
+    command_lifecycle.final_error_steering_deg = state.error_steering_deg;
     command_lifecycle.start_ms = now_ms;
     command_lifecycle.end_ms = 0U;
     command_lifecycle.timeout_ms = active_limits.watchdog_timeout_ms;
     pending_command_source = CMD_SRC_NONE;
-    PositionControl_ResetStatsTracking();
-
-    POSCTRL_LOG(DEBUG_INFO,
-                "CMD_START,id=%lu,src=%s,target_deg=%.3f,target_motor_deg=%.3f,start_ms=%lu,start_deg=%.3f,start_error_deg=%.3f\r\n",
-                (unsigned long)command_lifecycle.command_id,
-                PositionControlDiag_CommandSourceString(command_lifecycle.source),
-                command_lifecycle.target_steering_deg,
-                command_lifecycle.target_motor_deg,
-                (unsigned long)command_lifecycle.start_ms,
-                command_lifecycle.start_steering_deg,
-                command_lifecycle.final_error_deg);
 }
 
 static void PositionControl_CommandFinish(CommandState_t end_state, CommandResult_t result, uint32_t now_ms)
@@ -243,71 +163,55 @@ static void PositionControl_CommandFinish(CommandState_t end_state, CommandResul
         return;
     }
 
+    PositionControl_UpdateSteeringSnapshot();
+
     pid_state.integral = 0.0f;
     command_lifecycle.state = end_state;
     command_lifecycle.result = result;
     command_lifecycle.end_ms = now_ms;
-    command_lifecycle.final_steering_deg = MotorDegToSteeringDeg(state.current_angle);
-    command_lifecycle.final_error_deg = MotorDegToSteeringDeg(state.error);
+    command_lifecycle.final_steering_deg = state.current_steering_deg;
+    command_lifecycle.final_error_steering_deg = state.error_steering_deg;
+}
 
-    switch (end_state) {
-    case CMD_REACHED:
-    {
-        uint32_t settling_ms = command_lifecycle.end_ms - command_lifecycle.start_ms;
-        if (settling_ms > controller_stats.max_settle_time_ms) {
-            controller_stats.max_settle_time_ms = settling_ms;
-        }
-        POSCTRL_LOG(DEBUG_INFO,
-                    "CMD_REACHED,id=%lu,end_ms=%lu,settling_ms=%lu,final_deg=%.3f,final_error_deg=%.3f\r\n",
-                    (unsigned long)command_lifecycle.command_id,
-                    (unsigned long)command_lifecycle.end_ms,
-                    (unsigned long)settling_ms,
-                    command_lifecycle.final_steering_deg,
-                    command_lifecycle.final_error_deg);
-        break;
+float PositionControl_GetStableErrorMotorDeg(void)
+{
+    return stable_error_motor_deg;
+}
+
+uint32_t PositionControl_GetStableTimeMs(void)
+{
+    return stable_time_setting_ms;
+}
+
+void PositionControl_SetStableCriteriaMotorDeg(float error_threshold_motor_deg, uint32_t stable_time_ms)
+{
+    if (error_threshold_motor_deg <= 0.0f) {
+        error_threshold_motor_deg = STABLE_ERROR_MOTOR_DEG;
+    }
+    if (error_threshold_motor_deg > 100.0f) {
+        error_threshold_motor_deg = 100.0f;
     }
 
-    case CMD_TIMEOUT:
-        POSCTRL_LOG(DEBUG_ERROR,
-                    "CMD_TIMEOUT,id=%lu,end_ms=%lu,elapsed_ms=%lu,error_deg=%.3f\r\n",
-                    (unsigned long)command_lifecycle.command_id,
-                    (unsigned long)command_lifecycle.end_ms,
-                    (unsigned long)(command_lifecycle.end_ms - command_lifecycle.start_ms),
-                    command_lifecycle.final_error_deg);
-        break;
-
-    case CMD_ABORTED:
-        POSCTRL_LOG(DEBUG_WARNING,
-                    "CMD_ABORT,id=%lu,reason=%s,end_ms=%lu,error_deg=%.3f\r\n",
-                    (unsigned long)command_lifecycle.command_id,
-                    PositionControlDiag_CommandResultString(result),
-                    (unsigned long)command_lifecycle.end_ms,
-                    command_lifecycle.final_error_deg);
-        break;
-
-    case CMD_FAULTED:
-        POSCTRL_LOG(DEBUG_ERROR,
-                    "CMD_FAULT,id=%lu,reason=%s,end_ms=%lu,error_deg=%.3f\r\n",
-                    (unsigned long)command_lifecycle.command_id,
-                    PositionControlDiag_CommandResultString(result),
-                    (unsigned long)command_lifecycle.end_ms,
-                    command_lifecycle.final_error_deg);
-        break;
-
-    case CMD_IDLE:
-    case CMD_ACTIVE:
-    default:
-        break;
+    if (stable_time_ms == 0U) {
+        stable_time_ms = STABLE_TIME_MS;
     }
+    if (stable_time_ms > 10000U) {
+        stable_time_ms = 10000U;
+    }
+
+    stable_error_motor_deg = error_threshold_motor_deg;
+    stable_time_setting_ms = stable_time_ms;
 }
 
 static float PID_Calculate(float error, float dt)
 {
     float p_term = pid_params.Kp * error;
     float i_term = 0.0f;
+    float derivative_raw = 0.0f;
     float derivative = 0.0f;
     float d_term = 0.0f;
     float output = 0.0f;
+    float alpha = DEFAULT_D_FILTER_ALPHA;
 
     pid_state.integral += error * dt;
 
@@ -318,7 +222,14 @@ static float PID_Calculate(float error, float dt)
     }
 
     i_term = pid_params.Ki * pid_state.integral;
-    derivative = (error - pid_state.prev_error) / dt;
+    derivative_raw = (error - pid_state.prev_error) / dt;
+    if (alpha < 0.0f) {
+        alpha = 0.0f;
+    } else if (alpha > 0.99f) {
+        alpha = 0.99f;
+    }
+    derivative = (alpha * pid_state.derivative_filtered) + ((1.0f - alpha) * derivative_raw);
+    pid_state.derivative_filtered = derivative;
     d_term = pid_params.Kd * derivative;
     pid_state.prev_error = error;
 
@@ -333,6 +244,48 @@ static float PID_Calculate(float error, float dt)
     return output;
 }
 
+static float PositionControl_ApplyOutputShaping(float requested_output_hz, float dt)
+{
+    if (POSITION_OUTPUT_SLEW_HZ_PER_S > 0.0f) {
+        float max_delta_hz = POSITION_OUTPUT_SLEW_HZ_PER_S * dt;
+        float delta_hz = requested_output_hz - pid_state.last_output_hz;
+
+        if (delta_hz > max_delta_hz) {
+            requested_output_hz = pid_state.last_output_hz + max_delta_hz;
+        } else if (delta_hz < -max_delta_hz) {
+            requested_output_hz = pid_state.last_output_hz - max_delta_hz;
+        }
+    }
+
+    pid_state.last_output_hz = requested_output_hz;
+    return requested_output_hz;
+}
+
+static void PositionControl_ResetPidDynamicState(float current_error_motor_deg)
+{
+    pid_state.prev_error = current_error_motor_deg;
+    pid_state.integral = 0.0f;
+    pid_state.derivative_filtered = 0.0f;
+    pid_state.last_output_hz = 0.0f;
+}
+
+static bool PositionControl_ShouldHoldWithoutRecontrol(void)
+{
+    return fabsf(state.error_motor_deg) <= POSITION_HOLD_REARM_ERROR_MOTOR_DEG;
+}
+
+static void PositionControl_RearmHoldControl(uint32_t now_ms)
+{
+    command_lifecycle.state = CMD_ACTIVE;
+    command_lifecycle.result = CMD_RESULT_NONE;
+    command_lifecycle.start_ms = now_ms;
+    command_lifecycle.end_ms = 0U;
+    command_lifecycle.timeout_ms = PositionControlSafety_GetLimits().watchdog_timeout_ms;
+    state.is_stable = false;
+    state.stable_time_ms = 0U;
+    PositionControl_ResetPidDynamicState(state.error_motor_deg);
+}
+
 int PositionControl_Init(void)
 {
     SafetyLimits_t configured_limits = PositionControl_GetConfiguredSafetyLimits();
@@ -341,17 +294,20 @@ int PositionControl_Init(void)
 
     pid_state.prev_error = 0.0f;
     pid_state.integral = 0.0f;
+    pid_state.derivative_filtered = 0.0f;
+    pid_state.last_output_hz = 0.0f;
     pid_state.last_time_ms = HAL_GetTick();
 
-    state.target_angle = 0.0f;
-    state.current_angle = 0.0f;
-    state.error = 0.0f;
-    state.output = 0.0f;
+    state.target_motor_deg = 0.0f;
+    state.current_motor_deg = 0.0f;
+    state.error_motor_deg = 0.0f;
+    PositionControl_UpdateSteeringSnapshot();
+    state.output_hz = 0.0f;
     state.is_stable = false;
     state.stable_time_ms = 0U;
     state.mode = CTRL_MODE_IDLE;
-    measured_velocity_deg_per_s = 0.0f;
-    last_velocity_angle = 0.0f;
+    measured_velocity_motor_deg_per_s = 0.0f;
+    last_velocity_motor_deg = 0.0f;
     control_enabled = false;
     control_mode = CTRL_MODE_IDLE;
     PositionControl_ReportError(POS_CTRL_OK);
@@ -366,37 +322,31 @@ int PositionControl_Init(void)
     command_lifecycle.target_motor_deg = 0.0f;
     command_lifecycle.start_steering_deg = 0.0f;
     command_lifecycle.final_steering_deg = 0.0f;
-    command_lifecycle.final_error_deg = 0.0f;
+    command_lifecycle.final_error_steering_deg = 0.0f;
     command_lifecycle.start_ms = 0U;
     command_lifecycle.end_ms = 0U;
     command_lifecycle.timeout_ms = PositionControlSafety_GetLimits().watchdog_timeout_ms;
-    PositionControl_ClearStats();
     PositionControl_SyncDiagState();
 
-    POSCTRL_LOG(DEBUG_INFO,
-                "[PosCtrl] Initialized (failsafe profile=%s, soft_limit=ON, tracking=%.2f deg, velocity=%.2f deg/s, timeout=%lu ms)\r\n",
-                PositionControl_GetConfiguredSafetyProfileName(),
-                configured_limits.max_error_allowed,
-                configured_limits.max_velocity,
-                (unsigned long)configured_limits.watchdog_timeout_ms);
     return POS_CTRL_OK;
 }
 
-void PositionControl_UpdateWithCurrentAngle(float current_angle)
+void PositionControl_UpdateWithCurrentMotorDeg(float current_motor_deg)
 {
-    bool was_stable = state.is_stable;
     uint32_t current_time = 0U;
     float dt = 0.001f;
     PositionControlSafetyResult_t safety_result = {0};
+    PositionControlSafetyResult_t timeout_result = {0};
 
     DBG_LOOP_SET();
 
     if (!control_enabled) {
-        state.current_angle = current_angle;
-        state.error = state.target_angle - state.current_angle;
-        state.output = 0.0f;
-        measured_velocity_deg_per_s = 0.0f;
-        last_velocity_angle = state.current_angle;
+        state.current_motor_deg = current_motor_deg;
+        state.error_motor_deg = state.target_motor_deg - state.current_motor_deg;
+        state.output_hz = 0.0f;
+        measured_velocity_motor_deg_per_s = 0.0f;
+        last_velocity_motor_deg = state.current_motor_deg;
+        pid_state.last_output_hz = 0.0f;
         PulseControl_Stop();
         PositionControl_SyncDiagState();
         DBG_LOOP_RESET();
@@ -404,7 +354,7 @@ void PositionControl_UpdateWithCurrentAngle(float current_angle)
     }
 
     LAT_BEGIN(LAT_STAGE_SENSE);
-    state.current_angle = current_angle;
+    state.current_motor_deg = current_motor_deg;
     current_time = HAL_GetTick();
     dt = (current_time - pid_state.last_time_ms) / 1000.0f;
     if (dt <= 0.0f) {
@@ -412,27 +362,25 @@ void PositionControl_UpdateWithCurrentAngle(float current_angle)
     } else if (dt > 0.1f) {
         dt = 0.1f;
     }
-    measured_velocity_deg_per_s = (state.current_angle - last_velocity_angle) / dt;
-    last_velocity_angle = state.current_angle;
+    measured_velocity_motor_deg_per_s = (state.current_motor_deg - last_velocity_motor_deg) / dt;
+    last_velocity_motor_deg = state.current_motor_deg;
     pid_state.last_time_ms = current_time;
-    state.error = state.target_angle - state.current_angle;
-    PositionControl_RecordStatsSample(state.error);
+    state.error_motor_deg = state.target_motor_deg - state.current_motor_deg;
     LAT_END(LAT_STAGE_SENSE);
 
     LAT_BEGIN(LAT_STAGE_CONTROL);
-    if ((command_lifecycle.state == CMD_ACTIVE) &&
-        (command_lifecycle.timeout_ms > 0U)) {
-        uint32_t elapsed_ms = current_time - command_lifecycle.start_ms;
-        if (elapsed_ms > command_lifecycle.timeout_ms) {
-            fault_flag = 3U;
-            PositionControl_ReportError(POS_CTRL_ERR_TIMEOUT);
-            state.output = 0.0f;
+    if (command_lifecycle.state == CMD_ACTIVE) {
+        timeout_result = PositionControlSafety_EvaluateCommandTimeout(command_lifecycle.start_ms,
+                                                                      command_lifecycle.timeout_ms,
+                                                                      current_time);
+        if (!PositionControl_ApplySafetyResult(&timeout_result)) {
+            state.output_hz = 0.0f;
+            pid_state.last_output_hz = 0.0f;
             PulseControl_Stop();
             control_enabled = false;
             control_mode = CTRL_MODE_EMERGENCY;
             state.mode = CTRL_MODE_EMERGENCY;
-            pid_state.integral = 0.0f;
-            Relay_Emergency();
+            PositionControl_ResetPidDynamicState(state.error_motor_deg);
             PositionControl_CommandFinish(CMD_TIMEOUT, CMD_RESULT_TIMEOUT, current_time);
             PositionControl_SyncDiagState();
             LAT_END(LAT_STAGE_CONTROL);
@@ -441,12 +389,13 @@ void PositionControl_UpdateWithCurrentAngle(float current_angle)
         }
     }
 
-    safety_result = PositionControlSafety_Evaluate(state.current_angle,
-                                                   state.error,
-                                                   measured_velocity_deg_per_s);
+    safety_result = PositionControlSafety_Evaluate(state.current_motor_deg,
+                                                   state.error_motor_deg,
+                                                   measured_velocity_motor_deg_per_s);
     if (!PositionControl_ApplySafetyResult(&safety_result)) {
 
-        state.output = 0.0f;
+        state.output_hz = 0.0f;
+        pid_state.last_output_hz = 0.0f;
         if (command_lifecycle.state == CMD_ACTIVE) {
             PositionControl_CommandFinish(CMD_FAULTED, safety_result.result, current_time);
         }
@@ -458,31 +407,34 @@ void PositionControl_UpdateWithCurrentAngle(float current_angle)
     }
 
     if (command_lifecycle.state == CMD_REACHED) {
-        state.output = 0.0f;
-        PulseControl_Stop();
-        PositionControl_SyncDiagState();
-        LAT_END(LAT_STAGE_CONTROL);
-        DBG_LOOP_RESET();
-        return;
+        if (PositionControl_ShouldHoldWithoutRecontrol()) {
+            state.output_hz = 0.0f;
+            pid_state.last_output_hz = 0.0f;
+            PulseControl_Stop();
+            PositionControl_SyncDiagState();
+            LAT_END(LAT_STAGE_CONTROL);
+            DBG_LOOP_RESET();
+            return;
+        }
+
+        PositionControl_RearmHoldControl(current_time);
     }
 
-    state.output = PID_Calculate(state.error, dt);
+    state.output_hz = PositionControl_ApplyOutputShaping(PID_Calculate(state.error_motor_deg, dt), dt);
     LAT_END(LAT_STAGE_CONTROL);
 
     LAT_BEGIN(LAT_STAGE_ACTUATE);
-    PulseControl_SetFrequency((int32_t)state.output);
+    PulseControl_SetFrequency((int32_t)state.output_hz);
     LAT_END(LAT_STAGE_ACTUATE);
 
-    if (fabsf(state.error) < STABLE_ERROR_THRESHOLD) {
+    if (fabsf(state.error_motor_deg) < PositionControl_GetStableErrorMotorDeg()) {
         state.stable_time_ms += (uint32_t)(dt * 1000.0f);
-        if (state.stable_time_ms >= STABLE_TIME_MS) {
+        if (state.stable_time_ms >= PositionControl_GetStableTimeMs()) {
             state.is_stable = true;
-            if (!was_stable && (stable_callback != NULL)) {
-                stable_callback();
-            }
             if (command_lifecycle.state == CMD_ACTIVE) {
                 PositionControl_CommandFinish(CMD_REACHED, CMD_RESULT_REACHED, current_time);
-                state.output = 0.0f;
+                state.output_hz = 0.0f;
+                pid_state.last_output_hz = 0.0f;
                 PulseControl_Stop();
             }
         }
@@ -497,19 +449,18 @@ void PositionControl_UpdateWithCurrentAngle(float current_angle)
 
 void PositionControl_Update(void)
 {
-    PositionControl_UpdateWithCurrentAngle(EncoderReader_GetAngleDeg());
+    PositionControl_UpdateWithCurrentMotorDeg(EncoderReader_GetMotorDeg());
 }
 
-int PositionControl_SetTarget(float target_deg)
+int PositionControl_SetTargetMotorDeg(float target_motor_deg)
 {
-    return PositionControl_SetTargetWithSource(target_deg, CMD_SRC_NONE);
+    return PositionControl_SetTargetMotorDegWithSource(target_motor_deg, CMD_SRC_NONE);
 }
 
-int PositionControl_SetTargetWithSource(float target_deg, CommandSource_t source)
+int PositionControl_SetTargetMotorDegWithSource(float target_motor_deg, CommandSource_t source)
 {
-    if (target_deg > MAX_ANGLE_DEG || target_deg < MIN_ANGLE_DEG) {
+    if (target_motor_deg > MAX_MOTOR_ANGLE_DEG || target_motor_deg < MIN_MOTOR_ANGLE_DEG) {
         PositionControl_ReportError(POS_CTRL_ERR_OVER_LIMIT);
-        POSCTRL_LOG(DEBUG_ERROR, "[PosCtrl] Reject target %.3f deg (out of range)\r\n", target_deg);
         return POS_CTRL_ERR_OVER_LIMIT;
     }
 
@@ -518,16 +469,16 @@ int PositionControl_SetTargetWithSource(float target_deg, CommandSource_t source
     }
 
     __disable_irq();
-    state.target_angle = target_deg;
+    state.target_motor_deg = target_motor_deg;
     state.is_stable = false;
     state.stable_time_ms = 0U;
     pending_command_source = source;
-    PositionControl_ResetStatsTracking();
     __enable_irq();
 
-    state.current_angle = EncoderReader_GetAngleDeg();
-    state.error = state.target_angle - state.current_angle;
-    last_velocity_angle = state.current_angle;
+    state.current_motor_deg = EncoderReader_GetMotorDeg();
+    state.error_motor_deg = state.target_motor_deg - state.current_motor_deg;
+    last_velocity_motor_deg = state.current_motor_deg;
+    PositionControl_ResetPidDynamicState(state.error_motor_deg);
 
     if (PositionControl_CommandReadyForStart()) {
         PositionControl_CommandStart(source);
@@ -537,13 +488,24 @@ int PositionControl_SetTargetWithSource(float target_deg, CommandSource_t source
     return POS_CTRL_OK;
 }
 
-float PositionControl_GetTarget(void)
+int PositionControl_SetTargetSteeringDeg(float target_steering_deg)
 {
-    return state.target_angle;
+    return PositionControl_SetTargetSteeringDegWithSource(target_steering_deg, CMD_SRC_NONE);
+}
+
+int PositionControl_SetTargetSteeringDegWithSource(float target_steering_deg, CommandSource_t source)
+{
+    return PositionControl_SetTargetMotorDegWithSource(SteeringDegToMotorDeg(target_steering_deg), source);
+}
+
+float PositionControl_GetTargetMotorDeg(void)
+{
+    return state.target_motor_deg;
 }
 
 PositionControl_State_t PositionControl_GetState(void)
 {
+    PositionControl_UpdateSteeringSnapshot();
     return state;
 }
 
@@ -552,14 +514,14 @@ CommandLifecycle_t PositionControl_GetCommandLifecycle(void)
     return command_lifecycle;
 }
 
-float PositionControl_GetCurrentAngle(void)
+float PositionControl_GetCurrentMotorDeg(void)
 {
-    return state.current_angle;
+    return state.current_motor_deg;
 }
 
-float PositionControl_GetError(void)
+float PositionControl_GetErrorMotorDeg(void)
 {
-    return state.error;
+    return state.error_motor_deg;
 }
 
 bool PositionControl_IsStable(void)
@@ -569,16 +531,22 @@ bool PositionControl_IsStable(void)
 
 void PositionControl_SetPID(float Kp, float Ki, float Kd)
 {
-    pid_params.Kp = Kp;
-    pid_params.Ki = Ki;
-    pid_params.Kd = Kd;
-    pid_state.integral = 0.0f;
+    PID_Params_t params = pid_params;
 
-    POSCTRL_LOG(DEBUG_INFO,
-                "[PosCtrl] PID updated: Kp=%.2f Ki=%.2f Kd=%.2f\r\n",
-                Kp,
-                Ki,
-                Kd);
+    params.Kp = Kp;
+    params.Ki = Ki;
+    params.Kd = Kd;
+    PositionControl_SetPIDParams(&params);
+}
+
+void PositionControl_SetPIDParams(const PID_Params_t* params)
+{
+    if (params == NULL) {
+        return;
+    }
+
+    pid_params = *params;
+    PositionControl_ResetPidDynamicState(state.error_motor_deg);
 }
 
 void PositionControl_GetPID(PID_Params_t* params)
@@ -606,25 +574,21 @@ int PositionControl_Enable(void)
     control_mode = CTRL_MODE_POSITION;
     state.mode = CTRL_MODE_POSITION;
     PositionControl_ReportError(POS_CTRL_OK);
-    Relay_EmergencyRelease();
 
-    state.current_angle = EncoderReader_GetAngleDeg();
-    state.error = state.target_angle - state.current_angle;
-    pid_state.prev_error = state.error;
-    pid_state.integral = 0.0f;
+    state.current_motor_deg = EncoderReader_GetMotorDeg();
+    state.error_motor_deg = state.target_motor_deg - state.current_motor_deg;
+    PositionControl_ResetPidDynamicState(state.error_motor_deg);
     pid_state.last_time_ms = HAL_GetTick();
-    measured_velocity_deg_per_s = 0.0f;
-    last_velocity_angle = state.current_angle;
-    PositionControl_ResetStatsTracking();
+    measured_velocity_motor_deg_per_s = 0.0f;
+    last_velocity_motor_deg = state.current_motor_deg;
 
     if ((command_lifecycle.state != CMD_ACTIVE) &&
-        (fabsf(state.error) > STABLE_ERROR_THRESHOLD)) {
+        (fabsf(state.error_motor_deg) > PositionControl_GetStableErrorMotorDeg())) {
         PositionControl_CommandStart((pending_command_source != CMD_SRC_NONE) ?
                                      pending_command_source :
                                      CMD_SRC_LOCALTEST);
     }
 
-    POSCTRL_LOG(DEBUG_INFO, "[PosCtrl] Enabled (angle=%.2f)\r\n", state.current_angle);
     PositionControl_SyncDiagState();
     return POS_CTRL_OK;
 }
@@ -642,13 +606,12 @@ void PositionControl_Disable(void)
     control_enabled = false;
     control_mode = CTRL_MODE_IDLE;
     state.mode = CTRL_MODE_IDLE;
-    state.output = 0.0f;
-    measured_velocity_deg_per_s = 0.0f;
-    last_velocity_angle = state.current_angle;
-    PositionControl_ResetStatsTracking();
+    state.output_hz = 0.0f;
+    measured_velocity_motor_deg_per_s = 0.0f;
+    last_velocity_motor_deg = state.current_motor_deg;
+    PositionControl_ResetPidDynamicState(state.error_motor_deg);
     PulseControl_Stop();
 
-    POSCTRL_LOG(DEBUG_INFO, "[PosCtrl] Disabled\r\n");
     PositionControl_SyncDiagState();
 }
 
@@ -658,17 +621,15 @@ void PositionControl_Reset(void)
         PositionControl_CommandFinish(CMD_ABORTED, CMD_RESULT_DISABLED, HAL_GetTick());
     }
 
-    pid_state.integral = 0.0f;
-    pid_state.prev_error = 0.0f;
-    state.target_angle = 0.0f;
-    state.output = 0.0f;
+    state.target_motor_deg = 0.0f;
+    state.error_motor_deg = state.target_motor_deg - state.current_motor_deg;
+    state.output_hz = 0.0f;
     state.is_stable = false;
     state.stable_time_ms = 0U;
-    measured_velocity_deg_per_s = 0.0f;
-    last_velocity_angle = state.current_angle;
-    PositionControl_ResetStatsTracking();
+    measured_velocity_motor_deg_per_s = 0.0f;
+    last_velocity_motor_deg = state.current_motor_deg;
+    PositionControl_ResetPidDynamicState(state.error_motor_deg);
 
-    POSCTRL_LOG(DEBUG_INFO, "[PosCtrl] Reset\r\n");
     PositionControl_SyncDiagState();
 }
 
@@ -685,19 +646,13 @@ void PositionControl_SetSafetyLimits(SafetyLimits_t* limits)
     applied_limits = PositionControlSafety_GetLimits();
     command_lifecycle.timeout_ms = applied_limits.watchdog_timeout_ms;
     __enable_irq();
-
-    POSCTRL_LOG(DEBUG_INFO,
-                "[PosCtrl] Safety limits updated: max_error=%.2f deg, max_velocity=%.2f deg/s, timeout=%lu ms\r\n",
-                applied_limits.max_error_allowed,
-                applied_limits.max_velocity,
-                (unsigned long)applied_limits.watchdog_timeout_ms);
 }
 
 bool PositionControl_CheckSafety(void)
 {
-    PositionControlSafetyResult_t safety_result = PositionControlSafety_Evaluate(state.current_angle,
-                                                                                 state.error,
-                                                                                 measured_velocity_deg_per_s);
+    PositionControlSafetyResult_t safety_result = PositionControlSafety_Evaluate(state.current_motor_deg,
+                                                                                 state.error_motor_deg,
+                                                                                 measured_velocity_motor_deg_per_s);
 
     return PositionControl_ApplySafetyResult(&safety_result);
 }
@@ -721,28 +676,11 @@ void PositionControl_EmergencyStop(void)
     control_mode = CTRL_MODE_IDLE;
     state.mode = CTRL_MODE_IDLE;
 #endif
-    state.output = 0.0f;
+    state.output_hz = 0.0f;
     PulseControl_Stop();
-    pid_state.integral = 0.0f;
-    Relay_Emergency();
+    PositionControl_ResetPidDynamicState(state.error_motor_deg);
 
-#if APP_RUNTIME_EMERGENCY_LATCH_ENABLE
-    POSCTRL_LOG(DEBUG_ERROR,
-                "[PosCtrl] EMERGENCY STOP! FLT=%d Ang:%.1f Err:%.1f Vel:%.1f\r\n",
-                (int)fault_flag,
-                state.current_angle,
-                state.error,
-                measured_velocity_deg_per_s);
-#else
-    POSCTRL_LOG(DEBUG_WARNING,
-                "[PosCtrl] Bench stop, emergency latch disabled. FLT=%d Ang:%.1f Err:%.1f Vel:%.1f\r\n",
-                (int)fault_flag,
-                state.current_angle,
-                state.error,
-                measured_velocity_deg_per_s);
-#endif
-
-    measured_velocity_deg_per_s = 0.0f;
+    measured_velocity_motor_deg_per_s = 0.0f;
     PositionControl_SyncDiagState();
 }
 
@@ -751,53 +689,4 @@ void PositionControl_AbortCommand(CommandResult_t reason)
     if (command_lifecycle.state == CMD_ACTIVE) {
         PositionControl_CommandFinish(CMD_ABORTED, reason, HAL_GetTick());
     }
-}
-
-PosCtrl_Stats_t PositionControl_GetStats(void)
-{
-    PosCtrl_Stats_t snapshot;
-
-    __disable_irq();
-    snapshot = controller_stats;
-    __enable_irq();
-
-    return snapshot;
-}
-
-void PositionControl_ResetStats(void)
-{
-    __disable_irq();
-    PositionControl_ClearStats();
-    __enable_irq();
-}
-
-void PositionControl_RegisterErrorCallback(PosCtrl_ErrorCallback_t callback)
-{
-    __disable_irq();
-    error_callback = callback;
-    last_notified_error = POS_CTRL_OK;
-    __enable_irq();
-}
-
-void PositionControl_RegisterStableCallback(PosCtrl_StableCallback_t callback)
-{
-    __disable_irq();
-    stable_callback = callback;
-    __enable_irq();
-}
-
-void PositionControl_SetDebugLevel(DebugLevel_t level)
-{
-    if ((uint8_t)level > (uint8_t)DEBUG_VERBOSE) {
-        level = DEBUG_VERBOSE;
-    }
-    debug_level = level;
-}
-
-void PositionControl_PrintStatus(void)
-{
-    PositionControlDiag_PrintStateSummary(&state,
-                                          control_enabled,
-                                          fault_flag,
-                                          &command_lifecycle);
 }

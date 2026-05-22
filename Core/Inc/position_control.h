@@ -18,14 +18,6 @@ typedef enum {
 } PosCtrl_Error_t;
 
 typedef enum {
-    DEBUG_NONE = 0,
-    DEBUG_ERROR = 1,
-    DEBUG_WARNING = 2,
-    DEBUG_INFO = 3,
-    DEBUG_VERBOSE = 4
-} DebugLevel_t;
-
-typedef enum {
     CTRL_MODE_IDLE = 0,
     CTRL_MODE_POSITION = 1,
     CTRL_MODE_MANUAL = 2,
@@ -70,10 +62,15 @@ typedef struct {
 } PID_Params_t;
 
 typedef struct {
-    float target_angle;
-    float current_angle;
-    float error;
-    float output;
+    /* Human-facing steering-axis snapshot for logs, Teleplot, and Live Expressions. */
+    float target_steering_deg;
+    float current_steering_deg;
+    float error_steering_deg;
+    /* Controller-internal motor-axis values used by PID and soft limits. */
+    float target_motor_deg;
+    float current_motor_deg;
+    float error_motor_deg;
+    float output_hz;
     bool is_stable;
     uint32_t stable_time_ms;
     ControlMode_t mode;
@@ -89,45 +86,40 @@ typedef struct {
     float target_motor_deg;
     float start_steering_deg;
     float final_steering_deg;
-    float final_error_deg;
+    float final_error_steering_deg;
     uint32_t start_ms;
     uint32_t end_ms;
     uint32_t timeout_ms;
 } CommandLifecycle_t;
 
 typedef struct {
-    float max_error;
-    float avg_error;
-    uint32_t update_count;
-    uint32_t overshoot_count;
-    uint32_t max_settle_time_ms;
-} PosCtrl_Stats_t;
-
-typedef struct {
-    float max_error_allowed;
-    float max_velocity;
+    float max_error_motor_deg;
+    float max_velocity_motor_deg_per_s;
     uint32_t watchdog_timeout_ms;
 } SafetyLimits_t;
 
-typedef void (*PosCtrl_ErrorCallback_t)(PosCtrl_Error_t error);
-typedef void (*PosCtrl_StableCallback_t)(void);
-
 int PositionControl_Init(void);
 void PositionControl_Update(void);
-void PositionControl_UpdateWithCurrentAngle(float current_angle);
+void PositionControl_UpdateWithCurrentMotorDeg(float current_motor_deg);
 
-int PositionControl_SetTarget(float target_deg);
-int PositionControl_SetTargetWithSource(float target_deg, CommandSource_t source);
-float PositionControl_GetTarget(void);
+int PositionControl_SetTargetMotorDeg(float target_motor_deg);
+int PositionControl_SetTargetMotorDegWithSource(float target_motor_deg, CommandSource_t source);
+int PositionControl_SetTargetSteeringDeg(float target_steering_deg);
+int PositionControl_SetTargetSteeringDegWithSource(float target_steering_deg, CommandSource_t source);
+float PositionControl_GetTargetMotorDeg(void);
 
 PositionControl_State_t PositionControl_GetState(void);
 CommandLifecycle_t PositionControl_GetCommandLifecycle(void);
-float PositionControl_GetCurrentAngle(void);
-float PositionControl_GetError(void);
+float PositionControl_GetCurrentMotorDeg(void);
+float PositionControl_GetErrorMotorDeg(void);
 bool PositionControl_IsStable(void);
 
 void PositionControl_SetPID(float Kp, float Ki, float Kd);
+void PositionControl_SetPIDParams(const PID_Params_t* params);
 void PositionControl_GetPID(PID_Params_t* params);
+void PositionControl_SetStableCriteriaMotorDeg(float error_threshold_motor_deg, uint32_t stable_time_ms);
+float PositionControl_GetStableErrorMotorDeg(void);
+uint32_t PositionControl_GetStableTimeMs(void);
 
 void PositionControl_SetMode(ControlMode_t mode);
 ControlMode_t PositionControl_GetMode(void);
@@ -141,14 +133,6 @@ bool PositionControl_CheckSafety(void);
 void PositionControl_EmergencyStop(void);
 void PositionControl_AbortCommand(CommandResult_t reason);
 
-PosCtrl_Stats_t PositionControl_GetStats(void);
-void PositionControl_ResetStats(void);
-
-void PositionControl_RegisterErrorCallback(PosCtrl_ErrorCallback_t callback);
-void PositionControl_RegisterStableCallback(PosCtrl_StableCallback_t callback);
-
-void PositionControl_SetDebugLevel(DebugLevel_t level);
-void PositionControl_PrintStatus(void);
 const char* PositionControl_GetErrorString(PosCtrl_Error_t error);
 
 #endif

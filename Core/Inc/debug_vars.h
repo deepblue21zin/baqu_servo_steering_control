@@ -3,18 +3,30 @@
 
 #include <stdint.h>
 
-#define DBG_FAULT_POS_LIMIT   (1UL << 0)
-#define DBG_FAULT_TRACKING    (1UL << 1)
-#define DBG_FAULT_TIMEOUT     (1UL << 2)
-#define DBG_FAULT_VELOCITY    (1UL << 3)
-#define DBG_FAULT_DISABLED    (1UL << 8)
-#define DBG_FAULT_EMERGENCY   (1UL << 9)
+extern volatile uint32_t dbg_enc_raw;
+extern volatile int32_t  dbg_pos_mdeg;       /* steering milli-deg mirror for Live Expressions */
+extern volatile int32_t  dbg_target_mdeg;    /* steering milli-deg mirror for Live Expressions */
+extern volatile int32_t  dbg_err_mdeg;       /* steering milli-deg mirror for Live Expressions */
+extern volatile int32_t  dbg_pwm_cmd;        /* signed output frequency in Hz */
 
-extern volatile int32_t  dbg_enc_raw;
-extern volatile int32_t  dbg_pos_mdeg;
-extern volatile int32_t  dbg_target_mdeg;
-extern volatile int32_t  dbg_err_mdeg;
-extern volatile int16_t  dbg_pwm_cmd;
-extern volatile uint32_t dbg_fault_flags;
+extern volatile float dbg_kp;
+extern volatile float dbg_ki;
+extern volatile float dbg_kd;
+extern volatile float dbg_integral_limit;
+extern volatile float dbg_output_limit;
+extern volatile uint8_t dbg_pid_live_enable;
+extern volatile int32_t dbg_stable_error_mdeg; /* motor milli-deg stable threshold */
+extern volatile uint32_t dbg_stable_time_ms;
+
+extern volatile float dbg_target_steer_deg;
+extern volatile uint32_t dbg_target_apply;
+extern volatile uint8_t dbg_control_enable;
+extern volatile uint8_t dbg_control_disable;
+extern volatile uint8_t dbg_zero_request;
+extern volatile uint8_t dbg_estop_request;
+
+extern volatile uint8_t dbg_teleplot_enable;
+extern volatile uint8_t dbg_csv_log_enable;
+extern volatile uint8_t dbg_encoder_diag_enable;
 
 #endif /* DEBUG_VARS_H */

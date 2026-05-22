@@ -110,14 +110,6 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN Private defines */
 
-// Servo control pins (CubeMX 정의 사용)
-// SVON: PD14 -> SVON_PIN_Pin, SVON_PIN_GPIO_Port
-// EMG:  PD15 -> EMG_PIN_Pin, EMG_PIN_GPIO_Port
-#define SVON_PORT SVON_PIN_GPIO_Port
-#define SVON_PIN_CTRL SVON_PIN_Pin
-#define EMG_PORT EMG_PIN_GPIO_Port
-#define EMG_PIN_CTRL EMG_PIN_Pin
-
 // Output path aliases
 // PE9: pulse line driver input -> PF+/PF-
 // PE10: direction line driver input -> PR+/PR-

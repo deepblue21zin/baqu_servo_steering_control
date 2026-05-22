@@ -38,6 +38,7 @@
         * Output
         * EVENT_OUT
         * EXTI
+     PA3   ------> USART2_RX
      PA8   ------> USB_OTG_FS_SOF
      PA11   ------> USB_OTG_FS_DM
      PA12   ------> USB_OTG_FS_DP
@@ -76,6 +77,14 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(USER_Btn_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PA3 */
+  GPIO_InitStruct.Pin = GPIO_PIN_3;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  GPIO_InitStruct.Alternate = GPIO_AF7_USART2;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : LD_DE_Pin DBG_LOOP_Pin LD_REN_Pin */
   GPIO_InitStruct.Pin = LD_DE_Pin|DBG_LOOP_Pin|LD_REN_Pin;
